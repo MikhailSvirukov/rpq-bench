@@ -62,6 +62,7 @@ def main():
     parser.add_argument('--queries-url', required=True, help='tar/ZIP archive of numbered query directories')
     parser.add_argument('--matrices-url', required=True, help='tar/ZIP archive of numeric graph label matrices')
     parser.add_argument('--output', type=Path, default=Path('data'), help='new data directory')
+    parser.add_argument('--verify', action='store_true', help='verify downloaded input files in Python')
     args = parser.parse_args()
     if args.output.exists():
         parser.error(f'{args.output} already exists; choose a new --output directory')
@@ -85,10 +86,11 @@ def main():
             for path in matrices.iterdir():
                 if path.is_file() and path.stem.isdecimal() and path.suffix.lower() in ('.txt', '.mtx', '.mat'):
                     key = str(int(path.stem))
-                    if key == '0' or key in graph:
+                    if args.verify and (key == '0' or key in graph):
                         raise ValueError(f'duplicate or zero graph label: {path}')
                     graph[key] = path
-            validate_queries(query_dirs, graph)
+            if args.verify:
+                validate_queries(query_dirs, graph)
             ready = stage / 'ready'
             ready.mkdir()
             shutil.move(str(queries), ready / 'queries')
@@ -96,7 +98,7 @@ def main():
             ready.rename(args.output)
     except (OSError, ValueError, tarfile.TarError, zipfile.BadZipFile) as exc:
         parser.exit(1, f'{exc}\n')
-    print(f'Validated data saved to {args.output}')
+    print(f'Data saved to {args.output}')
 
 
 if __name__ == '__main__':

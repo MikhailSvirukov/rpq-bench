@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from inputs import query_metadata, validate_queries
+from inputs import query_metadata, validate_queries, matrix_shape
 from download_data import extract
 
 MATRIX = '%%MatrixMarket matrix coordinate pattern general\n%%GraphBLAS type bool\n3 3 2\n1 2\n2 3\n'
@@ -46,6 +46,25 @@ class InputsTest(unittest.TestCase):
         self.meta.write_text('0 0 1 4 1 2 1 -7')
         with self.assertRaisesRegex(ValueError, 'NFA state'):
             validate_queries([self.query], {'7': self.graph})
+
+    def test_fixed_endpoints(self):
+        self.meta.write_text('1 2 1 1 1 2 1 -7')
+        with self.assertRaisesRegex(ValueError, 'fixed source and destination'):
+            validate_queries([self.query], {'7': self.graph})
+
+    def test_empty_state_sets(self):
+        self.meta.write_text('0 0 0 0 1 -7')
+        validate_queries([self.query], {'7': self.graph})
+
+    def test_matrix_entries(self):
+        for matrix in [MATRIX.replace('1 2\n', '0 2\n'),
+                       MATRIX.replace('3 3 2', '3 3 3'),
+                       MATRIX + '3 1\n',
+                       MATRIX.replace('2 3\n', '2 3 1\n')]:
+            with self.subTest(matrix=matrix):
+                self.graph.write_text(matrix)
+                with self.assertRaises(ValueError):
+                    matrix_shape(self.graph)
 
     def test_archive_traversal(self):
         archive = self.root / 'bad.zip'

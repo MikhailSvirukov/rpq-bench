@@ -16,11 +16,11 @@ typedef int (*QueryFunction)
     const GrB_Index *, size_t, bool, char *
 ) ;
 
-/** Read a square Matrix Market matrix directly and materialize it by row.
+/** Read a Matrix Market matrix directly and materialize it by row.
  * @param[out] graph Receives an owned graph, or NULL on error.
  * @param[in] path Input filename.
  * @param[out] msg Optional LAGRAPH_MSG_LEN-byte error buffer.
- * @return GraphBLAS/LAGraph status; a file/shape error returns GrB_INVALID_VALUE.
+ * @return GraphBLAS/LAGraph status; file errors return GrB_INVALID_VALUE.
  */
 static int read_graph
 (
@@ -38,17 +38,6 @@ static int read_graph
     int info = LAGraph_MMRead (&A, file, msg) ;
     fclose (file) ;
     if (info != GrB_SUCCESS) goto cleanup ;
-    GrB_Index rows = 0, cols = 0 ;
-    info = GrB_Matrix_nrows (&rows, A) ;
-    if (info != GrB_SUCCESS) goto cleanup ;
-    info = GrB_Matrix_ncols (&cols, A) ;
-    if (info != GrB_SUCCESS) goto cleanup ;
-    if (rows != cols)
-    {
-        fprintf (stderr, "%s: expected a square matrix\n", path) ;
-        info = GrB_INVALID_VALUE ;
-        goto cleanup ;
-    }
     info = GrB_set (A, GrB_ROWMAJOR, GrB_STORAGE_ORIENTATION_HINT) ;
     if (info != GrB_SUCCESS) goto cleanup ;
     info = GrB_Matrix_wait (A, GrB_MATERIALIZE) ;
@@ -77,7 +66,7 @@ static int read_states
     for (size_t k = 0 ; k < *count ; k++)
     {
         uint64_t state ;
-        if (fscanf (file, "%" SCNu64, &state) != 1 || state == 0)
+        if (fscanf (file, "%" SCNu64, &state) != 1)
             return (GrB_INVALID_VALUE) ;
         (*states)[k] = state - 1 ;
     }
@@ -99,8 +88,8 @@ GraphLabel ;
  * @param[out] seconds Receives the elapsed time of the public query call.
  * @param[out] count Receives the returned path count; valid only on success.
  * @param[out] msg Optional LAGRAPH_MSG_LEN-byte error buffer.
- * @return GrB_SUCCESS or an input/allocation/algorithm error.  Fixed source
- *     and destination together are rejected: the API has no target filter.
+ * @return GrB_SUCCESS or a reading/allocation/algorithm error.
+ * @pre Input correctness is verified by Python when requested by the caller.
  */
 static int run_query
 (
@@ -134,19 +123,12 @@ static int run_query
         info = GrB_INVALID_VALUE ;
         goto cleanup ;
     }
-    if (source != 0 && target != 0)
-    {
-        if (msg != NULL) snprintf (msg, LAGRAPH_MSG_LEN,
-            "fixed source and destination together are unsupported by the API") ;
-        info = GrB_INVALID_VALUE ;
-        goto cleanup ;
-    }
     inverse = source == 0 && target != 0 ;
     info = read_states (meta, &QS, &nqs, msg) ;
     if (info != GrB_SUCCESS) goto cleanup ;
     info = read_states (meta, &QF, &nqf, msg) ;
     if (info != GrB_SUCCESS) goto cleanup ;
-    if (fscanf (meta, "%zu", &nl) != 1 || nl == 0)
+    if (fscanf (meta, "%zu", &nl) != 1)
     {
         info = GrB_INVALID_VALUE ;
         goto cleanup ;
@@ -160,23 +142,16 @@ static int run_query
     for (size_t a = 0 ; a < nl ; a++)
     {
         int64_t label ;
-        if (fscanf (meta, "%" SCNd64, &label) != 1 || label == 0 ||
-            label == INT64_MIN)
+        if (fscanf (meta, "%" SCNd64, &label) != 1)
         {
             info = GrB_INVALID_VALUE ;
             goto cleanup ;
         }
         char name [32] ;
-        snprintf (name, sizeof (name), "%" PRId64, label < 0 ? -label : label) ;
+        uint64_t magnitude = label < 0 ? -(uint64_t) label : (uint64_t) label ;
+        snprintf (name, sizeof (name), "%" PRIu64, magnitude) ;
         for (size_t k = 0 ; k < graph_count ; k++)
             if (!strcmp (graph[k].label, name)) G[a] = graph[k].graph ;
-        if (G[a] == NULL)
-        {
-            if (msg != NULL) snprintf (msg, LAGRAPH_MSG_LEN,
-                "missing graph matrix for label %s", name) ;
-            info = GrB_INVALID_VALUE ;
-            goto cleanup ;
-        }
         inverse_labels[a] = label < 0 ;
         snprintf (path, path_size, "%s/%" PRId64 ".txt", prefix, label) ;
         info = read_graph (&R[a], path, msg) ;
@@ -187,13 +162,6 @@ static int run_query
     GrB_Index ng = 0 ;
     info = GrB_Matrix_nrows (&ng, G[0]->A) ;
     if (info != GrB_SUCCESS) goto cleanup ;
-    if (source > ng || target > ng)
-    {
-        if (msg != NULL) snprintf (msg, LAGRAPH_MSG_LEN,
-            "query endpoint exceeds graph dimension %" PRIu64, (uint64_t) ng) ;
-        info = GrB_INVALID_INDEX ;
-        goto cleanup ;
-    }
     ns = source != 0 || inverse ? 1 : (size_t) ng ;
     info = LAGraph_Malloc ((void **) &S, ns, sizeof (GrB_Index), msg) ;
     if (info != GrB_SUCCESS) goto cleanup ;
@@ -221,14 +189,14 @@ cleanup:
     LAGraph_Free ((void **) &R, NULL) ;
     LAGraph_Free ((void **) &inverse_labels, NULL) ;
     if (info != GrB_SUCCESS && msg != NULL && msg[0] == '\0')
-        snprintf (msg, LAGRAPH_MSG_LEN, "invalid query metadata or matrix in %s", prefix) ;
+        snprintf (msg, LAGRAPH_MSG_LEN, "could not read or run query in %s", prefix) ;
     return (info) ;
 }
 
 typedef struct
 {
     double seconds ;                // sum of measured query times
-    size_t paths ;                  // identical across measured passes
+    size_t paths ;                  // most recent measured path count
     bool failed ;                   // suppress incomplete/invalid averages
 }
 BenchmarkResult ;
@@ -260,12 +228,24 @@ int main (int argc, char **argv)
     GraphLabel *graph = NULL ;
     BenchmarkResult *results = NULL ;
     bool failed = false ;
+    FILE *samples = NULL ;
+    const char *samples_path = getenv ("RPQ_BENCH_VERIFY_SAMPLES") ;
     bool trace_queries = getenv ("LAGRAPH_RPQ_TRACE") != NULL ;
     int info = LAGraph_Init (msg) ;
     if (info != GrB_SUCCESS)
     {
         fprintf (stderr, "initialization: info=%d %s\n", info, msg) ;
         return (EXIT_FAILURE) ;
+    }
+    if (samples_path != NULL)
+    {
+        samples = fopen (samples_path, "w") ;
+        if (samples == NULL)
+        {
+            fprintf (stderr, "%s: %s\n", samples_path, strerror (errno)) ;
+            info = GrB_INVALID_VALUE ;
+            goto cleanup ;
+        }
     }
     info = LAGraph_Calloc ((void **) &graph, (size_t) n, sizeof (GraphLabel), msg) ;
     if (info != GrB_SUCCESS) goto cleanup ;
@@ -310,12 +290,8 @@ int main (int argc, char **argv)
                     continue ;
                 }
                 if (phase == 0) continue ;
-                if (pass > 0 && results[q].paths != count)
-                {
-                    fprintf (stderr, "%s: path count changed between iterations\n",
-                        number) ;
-                    failed = results[q].failed = true ;
-                }
+                // Export observations only; Python performs optional verification.
+                if (samples != NULL) fprintf (samples, "%s\t%zu\n", number, count) ;
                 results[q].seconds += seconds ;
                 results[q].paths = count ;
             }
@@ -332,6 +308,11 @@ int main (int argc, char **argv)
             results[q].seconds / iterations, results[q].paths) ;
     }
 cleanup:
+    if (samples != NULL && fclose (samples) != 0)
+    {
+        fprintf (stderr, "%s: %s\n", samples_path, strerror (errno)) ;
+        failed = true ;
+    }
     if (graph != NULL)
         for (long k = 0 ; k < n ; k++) LAGraph_Delete (&graph[k].graph, NULL) ;
     LAGraph_Free ((void **) &graph, NULL) ;

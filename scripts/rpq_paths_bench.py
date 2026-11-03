@@ -6,9 +6,11 @@ from pathlib import Path
 import subprocess
 import sys
 import json
+import os
+import tempfile
 from contextlib import ExitStack
 
-from inputs import validate_queries
+from inputs import validate_queries, validate_samples
 
 
 def main():
@@ -28,6 +30,8 @@ def main():
                         help="benchmark CMake build directory (default: build)")
     parser.add_argument("--output", type=Path,
                         help="directory for results.tsv, errors.log and run.json")
+    parser.add_argument("--verify", action="store_true",
+                        help="verify input files and repeated path counts in Python")
     args = parser.parse_args()
     if args.warmup < 0 or args.iterations < 1:
         parser.error("--warmup must be nonnegative and --iterations must be positive")
@@ -37,7 +41,7 @@ def main():
     if not args.queries.is_dir():
         parser.error(f"not a queries directory: {args.queries}")
     queries = sorted((p for p in args.queries.iterdir()
-                      if p.is_dir() and p.name.isdecimal() and (p / "meta.txt").is_file()),
+                      if p.is_dir() and p.name.isdecimal()),
                      key=lambda p: int(p.name))
     if not queries:
         parser.error("no numbered query folders containing meta.txt")
@@ -49,7 +53,7 @@ def main():
                             if p.is_file() and p.stem.isdecimal() and int(p.stem) > 0
                             and p.suffix.lower() in (".txt", ".mtx", ".mat")),
                            key=lambda p: (int(p.stem), p.name))
-            if not files:
+            if args.verify and not files:
                 parser.error(f"no numeric matrix files (.txt/.mtx/.mat) in directory: {path}")
             inputs.extend(str(p) for p in files)
         else:
@@ -60,20 +64,21 @@ def main():
         path = Path(filename if separator else value)
         if not separator:
             label = path.stem
-        if not label or "/" in label or "\\" in label or not path.is_file():
+        if args.verify and (not label or "/" in label or "\\" in label or not path.is_file()):
             parser.error(f"expected a matrix directory, <label>.txt/.mtx, or <label>=<existing-file>: {value}")
-        if label in matrices:
+        if args.verify and label in matrices:
             parser.error(f"duplicate graph label: {label}")
-        if not label.isdecimal() or int(label) < 1 or int(label) > 2**63 - 1:
+        if args.verify and (not label.isdecimal() or int(label) < 1 or int(label) > 2**63 - 1):
             parser.error(f"expected a positive integer graph label: {label}")
         label = str(int(label))
-        if label in matrices:
+        if args.verify and label in matrices:
             parser.error(f"duplicate graph label: {label}")
         matrices[label] = path
-    try:
-        validate_queries(queries, matrices)
-    except (ValueError, OSError) as exc:
-        parser.error(str(exc))
+    if args.verify:
+        try:
+            validate_queries(queries, matrices)
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
     command = [str(driver.resolve()), args.semantics, str(args.warmup),
                str(args.iterations), str(len(matrices))]
     for label, path in matrices.items():
@@ -92,13 +97,26 @@ def main():
             return result.stdout.strip() if result.returncode == 0 else None
         build_info = args.build_dir / "build-info.json"
         metadata = {"command": command, "semantics": args.semantics,
+                    "verify": args.verify,
                     "warmup": args.warmup, "iterations": args.iterations,
                     "lagraph_commit": revision(root / "LAGraph"),
                     "graphblas_commit": revision(root / "GraphBLAS")}
         if build_info.is_file():
             metadata["build"] = json.loads(build_info.read_text())
+        environment = os.environ.copy()
+        environment.pop("RPQ_BENCH_VERIFY_SAMPLES", None)
+        if args.verify:
+            samples = ((args.output / "samples.tsv") if args.output is not None else
+                       Path(stack.enter_context(tempfile.TemporaryDirectory())) / "samples.tsv")
+            environment["RPQ_BENCH_VERIFY_SAMPLES"] = str(samples.resolve())
         status = subprocess.run(command, stdout=stdout, stderr=stderr,
-                                check=False).returncode
+                                env=environment, check=False).returncode
+        if args.verify and status == 0:
+            try:
+                validate_samples(samples)
+            except (ValueError, OSError) as exc:
+                print(f"verification: {exc}", file=stderr if stderr is not None else sys.stderr)
+                status = 1
         if args.output is not None:
             metadata["exit_code"] = status
             (args.output / "run.json").write_text(json.dumps(metadata, indent=2) + "\n")
