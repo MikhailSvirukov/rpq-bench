@@ -1,0 +1,6 @@
+[submodule "LAGraph"]
+	path = LAGraph
+	url = https://github.com/MikhailSvirukov/LAGraph.git
+[submodule "GraphBLAS"]
+	path = GraphBLAS
+	url = https://github.com/DrTimothyAldenDavis/GraphBLAS.git
