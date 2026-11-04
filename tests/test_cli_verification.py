@@ -168,6 +168,48 @@ for phase, passes in [('warmup', int(sys.argv[2])), ('measured', int(sys.argv[3]
         self.assertEqual(result.stdout, baseline.stdout)
         self.assertEqual((output / 'results.tsv').read_text(), result.stdout)
 
+    def test_stage_times_are_opt_in_and_isolate_environment(self):
+        driver = self.build / 'rpq_paths_benchmark'
+        driver.write_text(driver.read_text() + '''
+assert 'LAGRAPH_RPQ_QUERY_ID' not in os.environ
+timings = os.environ.get('LAGRAPH_RPQ_STAGE_TIMINGS')
+if timings:
+    with open(timings, 'a') as stream:
+        stream.write('1\\t0.01\\t0.02\\n')
+''')
+        inherited = self.root / 'inherited.tsv'
+        environment = dict(os.environ, LAGRAPH_RPQ_STAGE_TIMINGS=str(inherited),
+                           LAGRAPH_RPQ_QUERY_ID='stale')
+        for enabled in (False, True):
+            output = self.root / f'stage-times-{enabled}'
+            command = self.output_command(output)
+            if enabled:
+                command.append('--stage-times')
+                output.mkdir()
+                (output / 'stage_times.tsv').write_text('old results\n')
+            result = subprocess.run(command, capture_output=True, text=True, env=environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((output / 'stage_times.tsv').exists(), enabled)
+            self.assertFalse(inherited.exists())
+            self.assertEqual(json.loads((output / 'run.json').read_text())['stage_times'], enabled)
+            if enabled:
+                self.assertEqual((output / 'stage_times.tsv').read_text(),
+                                 'query\tmatrix_seconds\treconstruction_seconds\n1\t0.01\t0.02\n')
+
+    def test_stage_times_detect_old_driver_without_timing_rows(self):
+        output = self.root / 'old-stage-driver'
+        result = subprocess.run(self.output_command(output) + ['--stage-times'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('missing stage timing rows', (output / 'errors.log').read_text())
+
+    def test_stage_times_require_output(self):
+        result = subprocess.run(self.output_command(self.root / 'unused')[:-2] + ['--stage-times'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--stage-times requires --output', result.stderr)
+        self.assertFalse(self.marker.exists())
+
     def test_output_preserves_failure_and_completed_rows(self):
         driver = self.build / 'rpq_paths_benchmark'
         driver.write_text(driver.read_text() + "\nimport sys\nprint('query failed', file=sys.stderr)\nsys.exit(7)\n")

@@ -14,7 +14,7 @@ from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
 
-from inputs import validate_queries, validate_samples
+from inputs import validate_queries, validate_samples, validate_stage_times
 
 
 class BenchmarkInterrupted(Exception):
@@ -98,6 +98,8 @@ def main():
                         help="sample driver RSS and virtual memory in a separate process (Linux; requires --output)")
     parser.add_argument("--memory-interval-ms", type=float, default=20,
                         help="memory sampling interval in milliseconds (default: 20)")
+    parser.add_argument("--stage-times", action="store_true",
+                        help="have the algorithm write matrix/reconstruction times to stage_times.tsv (requires --output)")
     args = parser.parse_args()
     if args.warmup < 0 or args.iterations < 1:
         parser.error("--warmup must be nonnegative and --iterations must be positive")
@@ -105,6 +107,8 @@ def main():
         parser.error("--memory-interval-ms must be finite and positive")
     if args.memory and args.output is None:
         parser.error("--memory requires --output")
+    if args.stage_times and args.output is None:
+        parser.error("--stage-times requires --output")
     if args.memory and (not sys.platform.startswith("linux") or not Path("/proc/self/status").is_file()):
         parser.error("--memory requires Linux procfs mounted at /proc")
     driver = args.build_dir / "rpq_paths_benchmark"
@@ -181,6 +185,7 @@ def main():
         metadata = {"command": command, "semantics": args.semantics,
                     "verify": args.verify, "process": args.process,
                     "memory": args.memory,
+                    "stage_times": args.stage_times,
                     "warmup": args.warmup, "iterations": args.iterations,
                     "lagraph_commit": revision(root / "LAGraph"),
                     "graphblas_commit": revision(root / "GraphBLAS")}
@@ -198,6 +203,12 @@ def main():
         environment = os.environ.copy()
         environment.pop("RPQ_BENCH_VERIFY_SAMPLES", None)
         environment.pop("RPQ_BENCH_PROCESS", None)
+        environment.pop("LAGRAPH_RPQ_STAGE_TIMINGS", None)
+        environment.pop("LAGRAPH_RPQ_QUERY_ID", None)
+        if args.stage_times:
+            stage_times = args.output / "stage_times.tsv"
+            stage_times.write_text("query\tmatrix_seconds\treconstruction_seconds\n")
+            environment["LAGRAPH_RPQ_STAGE_TIMINGS"] = str(stage_times.resolve())
         if args.process or args.memory:
             environment["RPQ_BENCH_PROCESS"] = "1"
         if args.verify:
@@ -225,6 +236,12 @@ def main():
         finally:
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
+        if args.stage_times and status == 0:
+            try:
+                validate_stage_times(stage_times, queries, args.warmup + args.iterations)
+            except (ValueError, OSError) as exc:
+                print(f"stage timings: {exc}", file=stderr)
+                status = 1
         if args.verify and status == 0:
             try:
                 validate_samples(samples)

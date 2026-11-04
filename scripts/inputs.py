@@ -1,5 +1,7 @@
 """Optional verification of prepared RPQ input files and measured samples."""
 from pathlib import Path
+import csv
+import math
 
 
 def matrix_shape(path):
@@ -137,3 +139,23 @@ def validate_samples(path):
             if query in counts and counts[query] != count:
                 raise ValueError(f'{query}: path count changed between iterations')
             counts[query] = count
+
+
+def validate_stage_times(path, queries, passes):
+    """A successful run must report both stages for every invocation in order."""
+    names = [directory.resolve().name for directory in queries]
+    with path.open() as stream:
+        reader = csv.reader(stream, delimiter='\t')
+        if next(reader, None) != ['query', 'matrix_seconds', 'reconstruction_seconds']:
+            raise ValueError('invalid stage timing header')
+        count = 0
+        for row in reader:
+            if len(row) != 3 or row[0] != names[count % len(names)]:
+                raise ValueError('stage timing query order does not match the batch')
+            for field in row[1:]:
+                value = float(field)
+                if not math.isfinite(value) or value < 0:
+                    raise ValueError('stage times must be finite and nonnegative')
+            count += 1
+        if count != len(names) * passes:
+            raise ValueError('missing stage timing rows; rebuild the C driver and LAGraph')

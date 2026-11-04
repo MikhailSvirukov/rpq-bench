@@ -71,6 +71,36 @@ continue. Set `LAGRAPH_RPQ_TRACE=1` to log the active query and pass.
 Add `--verify` to check input files and repeated path counts in Python.
 Verification is disabled by default; the C algorithm assumes valid inputs.
 
+## Algorithm stage times
+
+Add `--stage-times --output <directory>` to write `stage_times.tsv`:
+
+```bash
+python3 scripts/rpq_paths_bench.py /path/to/queries /path/to/matrices \
+  --semantics trails --warmup 1 --iterations 5 \
+  --stage-times --output results/trails
+```
+
+The algorithm itself appends and flushes a row after each invocation, including
+warmups, in batch/pass order. Columns are `query`, `matrix_seconds`, and
+`reconstruction_seconds`. `query` is the query folder's name, preserved across
+repetitions. The first timer surrounds `LG_RpqPath_Traverse` (building P);
+the second surrounds `LG_RpqPath_Process` (path reconstruction and filtering).
+Internal workspace/roots initialization, final query cleanup, and file I/O are
+outside these two timers. A stage that fails reports its elapsed time; a stage
+not reached has an empty field. Queries that fail before entering the algorithm
+have no stage row. Existing output is replaced when a run starts.
+
+The existing `time_seconds` still covers the whole public query call, so it
+includes the timing file I/O when this option is enabled and need not equal the
+sum of the two stage times. The option can be combined with `--memory`.
+Rebuild the C driver and LAGraph after updating the submodule to use it.
+
+The launcher sets `LAGRAPH_RPQ_STAGE_TIMINGS` to the output path; the C driver
+sets `LAGRAPH_RPQ_QUERY_ID` before each invocation. Library-only callers can set
+these two variables themselves; the library appends headerless TSV rows and
+reports file errors through its return code. Use a separate file per process.
+
 ## Memory sampling (Linux)
 
 Add `--memory --output <directory>` to sample the C driver's resident memory

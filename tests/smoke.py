@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Integration test using the compiled public API, no external datasets."""
 import json
+import csv
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -24,7 +26,7 @@ with tempfile.TemporaryDirectory() as temporary:
             output = base / f'{semantics}-{verify}'
             command = [sys.executable, str(root / 'scripts/rpq_paths_bench.py'), str(queries), str(matrices),
                        '--build-dir', str(root / 'build'), '--semantics', semantics,
-                       '--warmup', '1', '--iterations', '2', '--output', str(output)]
+                       '--warmup', '1', '--iterations', '2', '--output', str(output), '--stage-times']
             if verify:
                 command.append('--verify')
             subprocess.run(command, check=True)
@@ -34,14 +36,27 @@ with tempfile.TemporaryDirectory() as temporary:
             metadata = json.loads((output / 'run.json').read_text())
             assert metadata['exit_code'] == 0 and metadata['verify'] == verify
             assert (output / 'samples.tsv').exists() == verify
+            with (output / 'stage_times.tsv').open() as stream:
+                stage_rows = list(csv.DictReader(stream, delimiter='\t'))
+            assert [row['query'] for row in stage_rows] == ['1', '2', '4'] * 3
+            for row in stage_rows:
+                assert all(math.isfinite(float(row[key])) and float(row[key]) >= 0
+                           for key in ('matrix_seconds', 'reconstruction_seconds')), row
+            for stage, total in zip(stage_rows[3:], lines[1:]):
+                assert float(stage['matrix_seconds']) + float(stage['reconstruction_seconds']) <= float(total.split('\t')[1]) + 2e-9
     # Real C diagnostics are opt-in and do not contaminate the result table.
     output = base / 'progress'
     result = subprocess.run([sys.executable, str(root / 'scripts/rpq_paths_bench.py'),
                              str(queries / '1'), str(matrices), '--process',
+                             '--stage-times', '--memory',
                              '--output', str(output)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stderr == (output / 'errors.log').read_text()
     assert '[process]' not in result.stdout
+    with (output / 'stage_times.tsv').open() as stream:
+        assert [row['query'] for row in csv.DictReader(stream, delimiter='\t')] == ['1']
+    with (output / 'memory.tsv').open() as stream:
+        assert [(row['query'], row['status']) for row in csv.DictReader(stream, delimiter='\t')] == [('1', 'ok')]
     stages = ['initializing LAGraph/GraphBLAS', 'initialization complete',
               'loading graph matrix 1/1', 'reading Matrix Market',
               'setting row-major storage', 'materializing', 'creating LAGraph graph',
@@ -61,12 +76,14 @@ with tempfile.TemporaryDirectory() as temporary:
             output = base / f'single-{semantics}-{verify}'
             command = [sys.executable, str(root / 'scripts/rpq_paths_bench.py'),
                        str(single), str(matrices), '--semantics', semantics,
-                       '--warmup', '1', '--iterations', '2', '--output', str(output)]
+                       '--warmup', '1', '--iterations', '2', '--output', str(output), '--stage-times']
             if verify:
                 command.append('--verify')
             subprocess.run(command, check=True)
             lines = (output / 'results.tsv').read_text().splitlines()
             assert [line.split('\t')[::2] for line in lines[1:]] == [['single query', '1']] * 2, lines
+            with (output / 'stage_times.tsv').open() as stream:
+                assert [row['query'] for row in csv.DictReader(stream, delimiter='\t')] == ['single query'] * 3
             metadata = json.loads((output / 'run.json').read_text())
             assert metadata['exit_code'] == 0 and metadata['verify'] == verify
             assert metadata['build']['lagraph_commit'] == metadata['lagraph_commit']

@@ -3,6 +3,10 @@
 //------------------------------------------------------------------------------
 // SPDX-License-Identifier: BSD-2-Clause
 
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "LAGraphX.h"
 #include <errno.h>
 #include <stdarg.h>
@@ -245,6 +249,7 @@ int main (int argc, char **argv)
     bool failed = false ;
     FILE *samples = NULL ;
     const char *samples_path = getenv ("RPQ_BENCH_VERIFY_SAMPLES") ;
+    const char *stage_timings = getenv ("LAGRAPH_RPQ_STAGE_TIMINGS") ;
     process_progress = getenv ("RPQ_BENCH_PROCESS") != NULL ;
     bool trace_queries = process_progress || getenv ("LAGRAPH_RPQ_TRACE") != NULL ;
     progress ("initializing LAGraph/GraphBLAS") ;
@@ -296,6 +301,23 @@ int main (int argc, char **argv)
                 double seconds = 0 ;
                 size_t count = 0 ;
                 msg[0] = '\0' ;
+                // The library writes stage timings itself and needs the actual
+                // batch query ID, including on repeated/warmup invocations.
+                if (stage_timings != NULL && stage_timings[0] != '\0')
+                {
+#ifdef _WIN32
+                    int env_info = _putenv_s ("LAGRAPH_RPQ_QUERY_ID", number) ;
+#else
+                    int env_info = setenv ("LAGRAPH_RPQ_QUERY_ID", number, 1) ;
+#endif
+                    if (env_info != 0)
+                    {
+                        fprintf (stderr, "could not set stage timing query ID: %s\n",
+                            strerror (errno)) ;
+                        failed = true ;
+                        goto cleanup ;
+                    }
+                }
                 if (trace_queries)
                 {
                     fprintf (stderr, "query %s: %s pass %ld\n", number,
