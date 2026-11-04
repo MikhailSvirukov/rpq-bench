@@ -9,28 +9,39 @@ import json
 import os
 import tempfile
 from contextlib import ExitStack
+from concurrent.futures import ThreadPoolExecutor
 
 from inputs import validate_queries, validate_samples
 
 
-def run_driver(command, results, stderr, environment):
+def forward_lines(source, *destinations):
+    for line in source:
+        for destination in destinations:
+            destination.write(line)
+            destination.flush()
+
+
+def run_driver(command, results, stderr, environment, progress=False):
     if results is None:
         return subprocess.run(command, stderr=stderr, env=environment,
                               check=False).returncode
-    # Forward each completed row immediately; never accumulate a full run.
-    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr,
+    # Drain stderr independently: loading can produce progress before any stdout.
+    with subprocess.Popen(command, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE if progress else stderr,
                           env=environment, text=True) as process:
-        try:
-            for line in process.stdout:
-                results.write(line)
-                results.flush()
-                sys.stdout.write(line)
-                sys.stdout.flush()
-            return process.wait()
-        except BaseException:
-            process.kill()
-            process.wait()
-            raise
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            errors = (executor.submit(forward_lines, process.stderr, stderr, sys.stderr)
+                      if progress else None)
+            try:
+                forward_lines(process.stdout, results, sys.stdout)
+                status = process.wait()
+                if errors is not None:
+                    errors.result()
+                return status
+            except BaseException:
+                process.kill()
+                process.wait()
+                raise
 
 
 def main():
@@ -52,6 +63,8 @@ def main():
                         help="also save stdout results to results.tsv, plus errors.log and run.json")
     parser.add_argument("--verify", action="store_true",
                         help="verify input files and repeated path counts in Python")
+    parser.add_argument("--process", action="store_true",
+                        help="show loading stages and active queries on stderr, also with --output")
     args = parser.parse_args()
     if args.warmup < 0 or args.iterations < 1:
         parser.error("--warmup must be nonnegative and --iterations must be positive")
@@ -98,10 +111,14 @@ def main():
             parser.error(f"duplicate graph label: {label}")
         matrices[label] = path
     if args.verify:
+        if args.process:
+            print("[process] verifying inputs", file=sys.stderr, flush=True)
         try:
             validate_queries(queries, matrices)
         except (ValueError, OSError) as exc:
             parser.error(str(exc))
+    if args.verify and args.process:
+        print("[process] input verification complete", file=sys.stderr, flush=True)
     command = [str(driver.resolve()), args.semantics, str(args.warmup),
                str(args.iterations), str(len(matrices))]
     for label, path in matrices.items():
@@ -120,7 +137,7 @@ def main():
             return result.stdout.strip() if result.returncode == 0 else None
         build_info = args.build_dir / "build-info.json"
         metadata = {"command": command, "semantics": args.semantics,
-                    "verify": args.verify,
+                    "verify": args.verify, "process": args.process,
                     "warmup": args.warmup, "iterations": args.iterations,
                     "lagraph_commit": revision(root / "LAGraph"),
                     "graphblas_commit": revision(root / "GraphBLAS")}
@@ -128,11 +145,14 @@ def main():
             metadata["build"] = json.loads(build_info.read_text())
         environment = os.environ.copy()
         environment.pop("RPQ_BENCH_VERIFY_SAMPLES", None)
+        environment.pop("RPQ_BENCH_PROCESS", None)
+        if args.process:
+            environment["RPQ_BENCH_PROCESS"] = "1"
         if args.verify:
             samples = ((args.output / "samples.tsv") if args.output is not None else
                        Path(stack.enter_context(tempfile.TemporaryDirectory())) / "samples.tsv")
             environment["RPQ_BENCH_VERIFY_SAMPLES"] = str(samples.resolve())
-        status = run_driver(command, results, stderr, environment)
+        status = run_driver(command, results, stderr, environment, args.process)
         if args.verify and status == 0:
             try:
                 validate_samples(samples)

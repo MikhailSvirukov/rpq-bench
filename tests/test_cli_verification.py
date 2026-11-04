@@ -142,6 +142,63 @@ print('2\\t0.2\\t3', flush=True)
                 process.kill()
             process.communicate()
 
+    def test_process_progress_is_opt_in(self):
+        driver = self.build / 'rpq_paths_benchmark'
+        driver.write_text(driver.read_text() + "\nimport sys\nif os.environ.get('RPQ_BENCH_PROCESS'):\n    print('[process] loading matrix', file=sys.stderr, flush=True)\n")
+        for enabled in (False, True):
+            for save in (False, True):
+                output = self.root / f'process-{enabled}-{save}'
+                command = self.output_command(output)
+                if not save:
+                    command = command[:-2]
+                if enabled:
+                    command.append('--process')
+                result = subprocess.run(command, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual('[process] loading matrix' in result.stderr, enabled)
+                self.assertNotIn('[process]', result.stdout)
+                if save:
+                    self.assertEqual((output / 'errors.log').read_text(), result.stderr)
+                    self.assertEqual(json.loads((output / 'run.json').read_text())['process'], enabled)
+
+    def test_process_is_visible_before_any_stdout(self):
+        fifo = self.root / 'continue-progress'
+        os.mkfifo(fifo)
+        # Opening both ends keeps cleanup nonblocking even if the child fails.
+        gate = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+        self.addCleanup(os.close, gate)
+        driver = self.build / 'rpq_paths_benchmark'
+        driver.write_text(f"""#!{sys.executable}
+import sys
+print('[process] reading matrix', file=sys.stderr, flush=True)
+with open({str(fifo)!r}) as stream:
+    stream.read(1)
+print('query\\ttime_seconds\\tpaths', flush=True)
+""")
+        output = self.root / 'progress-live'
+        process = subprocess.Popen(self.output_command(output) + ['--process'],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            ready, _, _ = select.select([process.stderr], [], [], 10)
+            self.assertTrue(ready, 'progress waits for stdout or process exit')
+            received = os.read(process.stderr.fileno(), 4096)
+            self.assertEqual(received, b'[process] reading matrix\n')
+            self.assertIsNone(process.poll())
+            self.assertEqual((output / 'results.tsv').read_bytes(), b'')
+            self.assertEqual((output / 'errors.log').read_bytes(), received)
+            os.write(gate, b'x')
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(stdout, b'query\ttime_seconds\tpaths\n')
+        finally:
+            if process.poll() is None:
+                os.write(gate, b'x')
+            try:
+                process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+
     def test_download_verification_is_opt_in(self):
         self.metadata.write_text('not metadata')
         queries = shutil.make_archive(str(self.root / 'q'), 'zip', self.queries)

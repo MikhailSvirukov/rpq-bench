@@ -34,6 +34,23 @@ with tempfile.TemporaryDirectory() as temporary:
             metadata = json.loads((output / 'run.json').read_text())
             assert metadata['exit_code'] == 0 and metadata['verify'] == verify
             assert (output / 'samples.tsv').exists() == verify
+    # Real C diagnostics are opt-in and do not contaminate the result table.
+    output = base / 'progress'
+    result = subprocess.run([sys.executable, str(root / 'scripts/rpq_paths_bench.py'),
+                             str(queries / '1'), str(matrices), '--process',
+                             '--output', str(output)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == (output / 'errors.log').read_text()
+    assert '[process]' not in result.stdout
+    stages = ['initializing LAGraph/GraphBLAS', 'initialization complete',
+              'loading graph matrix 1/1', 'reading Matrix Market',
+              'setting row-major storage', 'materializing', 'creating LAGraph graph',
+              'ready (info=0)', 'graph loading complete', 'query 1: measured pass 1',
+              'running algorithm', 'algorithm returned (info=0)']
+    previous = -1
+    for stage in stages:
+        previous = result.stderr.index(stage, previous + 1)
+    assert '[process]' not in (base / 'all-False/errors.log').read_text()
     # A named query folder is accepted directly, including paths with spaces.
     single = base / 'single query'
     single.mkdir()

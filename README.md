@@ -34,6 +34,10 @@ Results always appear on stdout as each measured query finishes.
 to `errors.log`, and writes `run.json` with the command, dependency commits,
 build configuration and exit status. Existing files are replaced. Without
 `--output`, errors go to stderr.
+Add `--process` to print initialization, each matrix's loading stages and the
+active query to stderr, flushing every message immediately. With `--output`,
+C driver diagnostics also appear in the terminal and are saved to `errors.log`.
+Rebuild the C driver after updating to use these loading diagnostics.
 
 `results.tsv` contains three tab-separated columns:
 

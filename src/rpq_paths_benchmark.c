@@ -5,9 +5,24 @@
 
 #include "LAGraphX.h"
 #include <errno.h>
+#include <stdarg.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
+
+static bool process_progress = false ;
+
+static void progress (const char *format, ...)
+{
+    if (!process_progress) return ;
+    va_list args ;
+    va_start (args, format) ;
+    fputs ("[process] ", stderr) ;
+    vfprintf (stderr, format, args) ;
+    va_end (args) ;
+    fputc ('\n', stderr) ;
+    fflush (stderr) ;
+}
 
 typedef int (*QueryFunction)
 (
@@ -28,6 +43,7 @@ static int read_graph
 )
 {
     *graph = NULL ;
+    progress ("matrix %s: opening", path) ;
     FILE *file = fopen (path, "r") ;
     if (file == NULL)
     {
@@ -35,15 +51,21 @@ static int read_graph
         return (GrB_INVALID_VALUE) ;
     }
     GrB_Matrix A = NULL ;
+    progress ("matrix %s: reading Matrix Market", path) ;
     int info = LAGraph_MMRead (&A, file, msg) ;
     fclose (file) ;
     if (info != GrB_SUCCESS) goto cleanup ;
+    progress ("matrix %s: setting row-major storage", path) ;
     info = GrB_set (A, GrB_ROWMAJOR, GrB_STORAGE_ORIENTATION_HINT) ;
     if (info != GrB_SUCCESS) goto cleanup ;
+    progress ("matrix %s: materializing", path) ;
     info = GrB_Matrix_wait (A, GrB_MATERIALIZE) ;
     if (info != GrB_SUCCESS) goto cleanup ;
+    progress ("matrix %s: creating LAGraph graph", path) ;
     info = LAGraph_New (graph, &A, LAGraph_ADJACENCY_DIRECTED, msg) ;
 cleanup:
+    progress ("matrix %s: %s (info=%d)", path,
+        info == GrB_SUCCESS ? "ready" : "failed", info) ;
     GrB_free (&A) ;
     return (info) ;
 }
@@ -169,11 +191,13 @@ static int run_query
     else if (inverse) S[0] = target - 1 ;
     else for (size_t k = 0 ; k < ns ; k++) S[k] = k ;
 
+    progress ("query %s: running algorithm", prefix) ;
     double begin = LAGraph_WallClockTime ( ) ;
     info = query (&paths, &path_count, R, inverse_labels, nl,
         inverse ? QF : QS, inverse ? nqf : nqs,
         inverse ? QS : QF, inverse ? nqs : nqf, G, S, ns, inverse, msg) ;
     *seconds = LAGraph_WallClockTime ( ) - begin ;
+    progress ("query %s: algorithm returned (info=%d)", prefix, info) ;
     if (info != GrB_SUCCESS) goto cleanup ;
     *count = path_count ;
 cleanup:
@@ -221,13 +245,16 @@ int main (int argc, char **argv)
     bool failed = false ;
     FILE *samples = NULL ;
     const char *samples_path = getenv ("RPQ_BENCH_VERIFY_SAMPLES") ;
-    bool trace_queries = getenv ("LAGRAPH_RPQ_TRACE") != NULL ;
+    process_progress = getenv ("RPQ_BENCH_PROCESS") != NULL ;
+    bool trace_queries = process_progress || getenv ("LAGRAPH_RPQ_TRACE") != NULL ;
+    progress ("initializing LAGraph/GraphBLAS") ;
     int info = LAGraph_Init (msg) ;
     if (info != GrB_SUCCESS)
     {
         fprintf (stderr, "initialization: info=%d %s\n", info, msg) ;
         return (EXIT_FAILURE) ;
     }
+    progress ("initialization complete") ;
     if (samples_path != NULL)
     {
         samples = fopen (samples_path, "w") ;
@@ -242,10 +269,12 @@ int main (int argc, char **argv)
     if (info != GrB_SUCCESS) goto cleanup ;
     for (long k = 0 ; k < n ; k++)
     {
+        progress ("loading graph matrix %ld/%ld", k + 1, n) ;
         graph[k].label = argv[5 + 2 * k] ;
         info = read_graph (&graph[k].graph, argv[6 + 2 * k], msg) ;
         if (info != GrB_SUCCESS) goto cleanup ;
     }
+    progress ("graph loading complete") ;
     if (printf ("query\ttime_seconds\tpaths\n") < 0 || fflush (stdout) != 0)
     {
         fprintf (stderr, "could not write results: %s\n", strerror (errno)) ;
