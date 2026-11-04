@@ -73,6 +73,88 @@ print('query\\ttime_seconds\\tpaths\\n1\\t0.1\\t2')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('path count changed', result.stderr)
 
+    def test_any_any_queries_are_silently_filtered_before_driver_and_verification(self):
+        for number, endpoints in ((2, '0 3'), (3, '0 0'), (4, '1 3')):
+            query = self.queries / str(number)
+            query.mkdir()
+            (query / 'meta.txt').write_text(f'{endpoints}\n1 1\n1 2\n1 7\n')
+            if number != 3:  # Skipped queries need no NFA files, even with --verify.
+                (query / '7.txt').write_text(MATRIX)
+        driver = self.build / 'rpq_paths_benchmark'
+        driver.write_text(f'''#!{sys.executable}
+from pathlib import Path
+import os, sys
+samples = os.environ.get('RPQ_BENCH_VERIFY_SAMPLES')
+if samples:
+    Path(samples).write_text('')
+print('query\\ttime_seconds\\tpaths', flush=True)
+for phase, passes in [('warmup', int(sys.argv[2])), ('measured', int(sys.argv[3]))]:
+    for iteration in range(1, passes + 1):
+        for query in sys.argv[5 + 2 * int(sys.argv[4]):]:
+            name = Path(query).name
+            if os.environ.get('RPQ_BENCH_PROCESS'):
+                print(f'query {{name}}: {{phase}} pass {{iteration}}', file=sys.stderr, flush=True)
+                print(f'[process] query {{query}}: running algorithm', file=sys.stderr, flush=True)
+                print(f'[process] query {{query}}: algorithm returned (info=0)', file=sys.stderr, flush=True)
+            if phase == 'measured':
+                print(f'{{name}}\\t0.1\\t1', flush=True)
+                if samples:
+                    with open(samples, 'a') as stream:
+                        stream.write(f'{{name}}\\t1\\n')
+''')
+        for verify in (False, True):
+            if verify:
+                # Existing verification still rejects two fixed endpoints.
+                shutil.rmtree(self.queries / '4')
+            for memory in (False, True):
+                if memory and not sys.platform.startswith('linux'):
+                    continue
+                output = self.root / f'filtered-{verify}-{memory}'
+                command = self.output_command(output) + ['--process', '--warmup', '1', '--iterations', '2']
+                if verify:
+                    command.append('--verify')
+                if memory:
+                    command.append('--memory')
+                result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                expected = ['1', '2'] if verify else ['1', '2', '4']
+                self.assertEqual([line.split('\t')[0] for line in result.stdout.splitlines()[1:]], expected * 2)
+                self.assertNotIn('query 3:', result.stderr)
+                self.assertNotIn(str(self.queries / '3'), result.stderr)
+                metadata = json.loads((output / 'run.json').read_text())
+                self.assertEqual(metadata['command'][-len(expected):], [str(self.queries / name) for name in expected])
+                for path in output.iterdir():
+                    self.assertNotIn(str(self.queries / '3'), path.read_text())
+                if memory:
+                    import csv
+                    with (output / 'memory.tsv').open() as stream:
+                        self.assertEqual([row['query'] for row in csv.DictReader(stream, delimiter='\t')], expected * 3)
+
+    def test_all_any_any_queries_exit_silently_without_files_or_driver(self):
+        self.metadata.write_text('\n  00\t\n0\n')
+        (self.build / 'rpq_paths_benchmark').unlink()
+        for single in (False, True):
+            for existing_output in (False, True):
+                output = self.root / f'empty-{single}-{existing_output}'
+                if existing_output:
+                    output.mkdir()
+                    (output / 'results.tsv').write_text('previous results\n')
+                command = self.output_command(output) + ['--verify', '--process']
+                if single:
+                    command[2] = str(self.metadata.parent)
+                if sys.platform.startswith('linux'):
+                    command.append('--memory')
+                result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr, '')
+                self.assertFalse(self.marker.exists())
+                if existing_output:
+                    self.assertEqual(list(output.iterdir()), [output / 'results.tsv'])
+                    self.assertEqual((output / 'results.tsv').read_text(), 'previous results\n')
+                else:
+                    self.assertFalse(output.exists())
+
     def output_command(self, output):
         return [sys.executable, str(ROOT / 'scripts/rpq_paths_bench.py'),
                 str(self.queries), str(self.matrices), '--build-dir', str(self.build),

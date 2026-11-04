@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory() as temporary:
             subprocess.run(command, check=True)
             lines = (output / 'results.tsv').read_text().splitlines()
             assert lines[0] == 'query\ttime_seconds\tpaths', lines
-            assert [line.split('\t')[::2] for line in lines[1:]] == [['1', '1'], ['2', '1'], ['3', '2'], ['4', '1']] * 2, lines
+            assert [line.split('\t')[::2] for line in lines[1:]] == [['1', '1'], ['2', '1'], ['4', '1']] * 2, lines
             metadata = json.loads((output / 'run.json').read_text())
             assert metadata['exit_code'] == 0 and metadata['verify'] == verify
             assert (output / 'samples.tsv').exists() == verify
@@ -134,4 +134,4 @@ with tempfile.TemporaryDirectory() as temporary:
     subprocess.run([sys.executable, str(root / 'scripts/download_data.py'),
                     '--queries-url', Path(qzip).as_uri(), '--matrices-url', Path(mzip).as_uri(),
                     '--output', str(base / 'downloaded'), '--verify'], check=True)
-print('Smoke tests passed: single/batch queries, four semantics with/without --verify, inverse/backward/free queries, repeated passes, download.')
+print('Smoke tests passed: single/batch queries, four semantics with/without --verify, inverse/backward queries, any-any filtering, repeated passes, download.')

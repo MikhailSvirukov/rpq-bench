@@ -23,6 +23,13 @@ python3 scripts/rpq_paths_bench.py /path/to/queries/1 /path/to/matrices \
   --semantics trails --warmup 1 --iterations 5 --output results/query-1
 ```
 
+Queries whose source and destination in `meta.txt` are both zero (`any-any`)
+are silently skipped in Python before verification or driver startup. No log
+entries or report records are created for them. If all queries are skipped,
+the command succeeds without launching the driver or creating output files.
+This filter retains queries with at least one fixed endpoint; the existing
+`--verify` check still rejects two fixed endpoints as unsupported by the API.
+
 The second argument accepts a graph matrix directory, individual numeric
 matrix files, or `label=/path/to/matrix` mappings. A matrix directory is scanned
 for positive numeric `.txt`, `.mtx`, and `.mat` filenames.
