@@ -34,6 +34,25 @@ with tempfile.TemporaryDirectory() as temporary:
             metadata = json.loads((output / 'run.json').read_text())
             assert metadata['exit_code'] == 0 and metadata['verify'] == verify
             assert (output / 'samples.tsv').exists() == verify
+    # A named query folder is accepted directly, including paths with spaces.
+    single = base / 'single query'
+    single.mkdir()
+    for path in (queries / '1').iterdir():
+        (single / path.name).write_bytes(path.read_bytes())
+    for verify in (False, True):
+        for semantics in ('all', 'simple', 'trails', 'shortest'):
+            output = base / f'single-{semantics}-{verify}'
+            command = [sys.executable, str(root / 'scripts/rpq_paths_bench.py'),
+                       str(single), str(matrices), '--semantics', semantics,
+                       '--warmup', '1', '--iterations', '2', '--output', str(output)]
+            if verify:
+                command.append('--verify')
+            subprocess.run(command, check=True)
+            lines = (output / 'results.tsv').read_text().splitlines()
+            assert [line.split('\t')[::2] for line in lines[1:]] == [['single query', '1']], lines
+            metadata = json.loads((output / 'run.json').read_text())
+            assert metadata['exit_code'] == 0 and metadata['verify'] == verify
+            assert metadata['build']['lagraph_commit'] == metadata['lagraph_commit']
     # Python rejects unsupported endpoints before starting the C executable.
     fixed = queries / '5'
     fixed.mkdir()
@@ -53,4 +72,4 @@ with tempfile.TemporaryDirectory() as temporary:
     subprocess.run([sys.executable, str(root / 'scripts/download_data.py'),
                     '--queries-url', Path(qzip).as_uri(), '--matrices-url', Path(mzip).as_uri(),
                     '--output', str(base / 'downloaded'), '--verify'], check=True)
-print('Smoke tests passed: four semantics with/without --verify, inverse/backward/free queries, repeated passes, download.')
+print('Smoke tests passed: single/batch queries, four semantics with/without --verify, inverse/backward/free queries, repeated passes, download.')

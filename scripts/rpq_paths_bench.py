@@ -16,7 +16,7 @@ from inputs import validate_queries, validate_samples
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("queries", type=Path,
-                        help="directory of numbered query folders containing meta.txt")
+                        help="query folder containing meta.txt, or directory of numbered query folders")
     parser.add_argument("matrices", nargs="+",
                         help="matrix directory, individual <label>.txt/.mtx files, or <label>=<path>")
     parser.add_argument("--semantics", choices=("all", "simple", "trails", "shortest"),
@@ -40,11 +40,14 @@ def main():
         parser.error(f"missing {driver}; build the rpq_paths_benchmark CMake target first")
     if not args.queries.is_dir():
         parser.error(f"not a queries directory: {args.queries}")
-    queries = sorted((p for p in args.queries.iterdir()
-                      if p.is_dir() and p.name.isdecimal()),
-                     key=lambda p: int(p.name))
+    if (args.queries / "meta.txt").is_file():
+        queries = [args.queries]
+    else:
+        queries = sorted((p for p in args.queries.iterdir()
+                          if p.is_dir() and p.name.isdecimal()),
+                         key=lambda p: int(p.name))
     if not queries:
-        parser.error("no numbered query folders containing meta.txt")
+        parser.error("expected meta.txt or numbered query folders containing meta.txt")
     inputs = []
     for value in args.matrices:
         path = Path(value)

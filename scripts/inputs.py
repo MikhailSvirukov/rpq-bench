@@ -132,7 +132,7 @@ def validate_samples(path):
     counts = {}
     with path.open() as stream:
         for line in stream:
-            query, count = line.split()
+            query, count = line.rstrip('\n').rsplit('\t', 1)
             count = int(count)
             if query in counts and counts[query] != count:
                 raise ValueError(f'{query}: path count changed between iterations')

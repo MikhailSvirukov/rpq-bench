@@ -14,6 +14,19 @@ python3 scripts/rpq_paths_bench.py /path/to/queries /path/to/matrices \
   --semantics trails --warmup 1 --iterations 5 --output results/trails
 ```
 
+The first argument accepts either a batch directory with numbered query
+subfolders, or one query folder containing `meta.txt` and its NFA label
+matrices. A single query folder may have any name. For example:
+
+```bash
+python3 scripts/rpq_paths_bench.py /path/to/queries/1 /path/to/matrices \
+  --semantics trails --warmup 1 --iterations 5 --output results/query-1
+```
+
+The second argument accepts a graph matrix directory, individual numeric
+matrix files, or `label=/path/to/matrix` mappings. A matrix directory is scanned
+for positive numeric `.txt`, `.mtx`, and `.mat` filenames.
+
 `--semantics`: `all`, `simple`, `trails`, or `shortest`.
 `--build-dir` selects the build directory (default: this repository's `build`).
 `--output` writes `results.tsv`, `errors.log`, and `run.json` with the command,
