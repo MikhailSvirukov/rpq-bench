@@ -29,9 +29,11 @@ for positive numeric `.txt`, `.mtx`, and `.mat` filenames.
 
 `--semantics`: `all`, `simple`, `trails`, or `shortest`.
 `--build-dir` selects the build directory (default: this repository's `build`).
-`--output` writes `results.tsv`, `errors.log`, and `run.json` with the command,
-dependency commits, build configuration and exit status. Existing files are
-replaced. Without it, results go to stdout and errors to stderr.
+Results always appear on stdout as each measured query finishes.
+`--output` additionally saves the same rows to `results.tsv`, redirects errors
+to `errors.log`, and writes `run.json` with the command, dependency commits,
+build configuration and exit status. Existing files are replaced. Without
+`--output`, errors go to stderr.
 
 `results.tsv` contains three tab-separated columns:
 

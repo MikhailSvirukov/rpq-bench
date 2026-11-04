@@ -13,6 +13,26 @@ from contextlib import ExitStack
 from inputs import validate_queries, validate_samples
 
 
+def run_driver(command, results, stderr, environment):
+    if results is None:
+        return subprocess.run(command, stderr=stderr, env=environment,
+                              check=False).returncode
+    # Forward each completed row immediately; never accumulate a full run.
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr,
+                          env=environment, text=True) as process:
+        try:
+            for line in process.stdout:
+                results.write(line)
+                results.flush()
+                sys.stdout.write(line)
+                sys.stdout.flush()
+            return process.wait()
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("queries", type=Path,
@@ -29,7 +49,7 @@ def main():
                         default=Path(__file__).resolve().parents[1] / "build",
                         help="benchmark CMake build directory (default: build)")
     parser.add_argument("--output", type=Path,
-                        help="directory for results.tsv, errors.log and run.json")
+                        help="also save stdout results to results.tsv, plus errors.log and run.json")
     parser.add_argument("--verify", action="store_true",
                         help="verify input files and repeated path counts in Python")
     args = parser.parse_args()
@@ -88,10 +108,10 @@ def main():
         command.extend([label, str(path.resolve())])
     command.extend(str(directory.resolve()) for directory in queries)
     with ExitStack() as stack:
-        stdout = stderr = None
+        results = stderr = None
         if args.output is not None:
             args.output.mkdir(parents=True, exist_ok=True)
-            stdout = stack.enter_context((args.output / "results.tsv").open("w"))
+            results = stack.enter_context((args.output / "results.tsv").open("w"))
             stderr = stack.enter_context((args.output / "errors.log").open("w"))
         root = Path(__file__).resolve().parents[1]
         def revision(path):
@@ -112,8 +132,7 @@ def main():
             samples = ((args.output / "samples.tsv") if args.output is not None else
                        Path(stack.enter_context(tempfile.TemporaryDirectory())) / "samples.tsv")
             environment["RPQ_BENCH_VERIFY_SAMPLES"] = str(samples.resolve())
-        status = subprocess.run(command, stdout=stdout, stderr=stderr,
-                                env=environment, check=False).returncode
+        status = run_driver(command, results, stderr, environment)
         if args.verify and status == 0:
             try:
                 validate_samples(samples)

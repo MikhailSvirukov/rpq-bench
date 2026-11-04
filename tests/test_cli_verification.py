@@ -1,6 +1,10 @@
 """Exercise the verification switch at the Python/C process boundary."""
 from pathlib import Path
 import shutil
+import json
+import os
+import select
+import time
 import subprocess
 import sys
 import tempfile
@@ -68,6 +72,75 @@ print('query\\ttime_seconds\\tpaths\\n1\\t0.1\\t2')
         self.assertTrue(self.marker.exists())
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('path count changed', result.stderr)
+
+    def output_command(self, output):
+        return [sys.executable, str(ROOT / 'scripts/rpq_paths_bench.py'),
+                str(self.queries), str(self.matrices), '--build-dir', str(self.build),
+                '--output', str(output)]
+
+    def test_output_duplicates_stdout(self):
+        baseline = self.launch(False)
+        output = self.root / 'results'
+        result = subprocess.run(self.output_command(output), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, baseline.stdout)
+        self.assertEqual((output / 'results.tsv').read_text(), result.stdout)
+
+    def test_output_preserves_failure_and_completed_rows(self):
+        driver = self.build / 'rpq_paths_benchmark'
+        driver.write_text(driver.read_text() + "\nimport sys\nprint('query failed', file=sys.stderr)\nsys.exit(7)\n")
+        output = self.root / 'results'
+        result = subprocess.run(self.output_command(output), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 7)
+        self.assertIn('1\t0.1\t2', result.stdout)
+        self.assertEqual((output / 'results.tsv').read_text(), result.stdout)
+        self.assertIn('query failed', (output / 'errors.log').read_text())
+        self.assertEqual(json.loads((output / 'run.json').read_text())['exit_code'], 7)
+
+    def test_output_is_visible_before_driver_finishes(self):
+        fifo = self.root / 'continue'
+        os.mkfifo(fifo)
+        driver = self.build / 'rpq_paths_benchmark'
+        driver.write_text(f"""#!{sys.executable}
+import sys
+print('query\\ttime_seconds\\tpaths', flush=True)
+print('1\\t0.1\\t2', flush=True)
+with open({str(fifo)!r}) as stream:
+    stream.read()
+print('2\\t0.2\\t3', flush=True)
+""")
+        output = self.root / 'results'
+        process = subprocess.Popen(self.output_command(output), stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE)
+        received = b''
+        try:
+            deadline = time.monotonic() + 10
+            while received.count(b'\n') < 2:
+                remaining = deadline - time.monotonic()
+                self.assertGreater(remaining, 0, 'stdout was buffered until process exit')
+                ready, _, _ = select.select([process.stdout], [], [], remaining)
+                self.assertTrue(ready, 'stdout was buffered until process exit')
+                chunk = os.read(process.stdout.fileno(), 4096)
+                self.assertTrue(chunk, 'launcher exited before publishing results')
+                received += chunk
+            self.assertIsNone(process.poll())
+            self.assertEqual((output / 'results.tsv').read_bytes(), received)
+            # The reader opens the FIFO after publishing its first rows.
+            while True:
+                try:
+                    fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+                    os.close(fd)
+                    break
+                except OSError:
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.01)
+            tail, errors = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, errors)
+            self.assertEqual((output / 'results.tsv').read_bytes(), received + tail)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
 
     def test_download_verification_is_opt_in(self):
         self.metadata.write_text('not metadata')
