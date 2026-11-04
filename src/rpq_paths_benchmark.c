@@ -193,14 +193,6 @@ cleanup:
     return (info) ;
 }
 
-typedef struct
-{
-    double seconds ;                // sum of measured query times
-    size_t paths ;                  // most recent measured path count
-    bool failed ;                   // suppress incomplete/invalid averages
-}
-BenchmarkResult ;
-
 // Python supplies: semantics warmup iterations graph_count
 // (label graph_file)... query_prefixes...
 int main (int argc, char **argv)
@@ -226,7 +218,6 @@ int main (int argc, char **argv)
     size_t query_count = argc - first_query ;
     char msg [LAGRAPH_MSG_LEN] = "" ;
     GraphLabel *graph = NULL ;
-    BenchmarkResult *results = NULL ;
     bool failed = false ;
     FILE *samples = NULL ;
     const char *samples_path = getenv ("RPQ_BENCH_VERIFY_SAMPLES") ;
@@ -249,14 +240,17 @@ int main (int argc, char **argv)
     }
     info = LAGraph_Calloc ((void **) &graph, (size_t) n, sizeof (GraphLabel), msg) ;
     if (info != GrB_SUCCESS) goto cleanup ;
-    info = LAGraph_Calloc ((void **) &results, query_count,
-        sizeof (BenchmarkResult), msg) ;
-    if (info != GrB_SUCCESS) goto cleanup ;
     for (long k = 0 ; k < n ; k++)
     {
         graph[k].label = argv[5 + 2 * k] ;
         info = read_graph (&graph[k].graph, argv[6 + 2 * k], msg) ;
         if (info != GrB_SUCCESS) goto cleanup ;
+    }
+    if (printf ("query\ttime_seconds\tpaths\n") < 0 || fflush (stdout) != 0)
+    {
+        fprintf (stderr, "could not write results: %s\n", strerror (errno)) ;
+        failed = true ;
+        goto cleanup ;
     }
     // Finish every warmup batch before starting measured batches.  Keeping
     // phases separate also avoids overflowing warmup + iterations.
@@ -286,26 +280,30 @@ int main (int argc, char **argv)
                     fprintf (stderr, "%s: %s pass %ld: info=%d %s\n",
                         number, phase == 0 ? "warmup" : "measured",
                         pass + 1, query_info, msg) ;
-                    failed = results[q].failed = true ;
+                    failed = true ;
                     continue ;
                 }
                 if (phase == 0) continue ;
                 // Export observations only; Python performs optional verification.
-                if (samples != NULL) fprintf (samples, "%s\t%zu\n", number, count) ;
-                results[q].seconds += seconds ;
-                results[q].paths = count ;
+                // Publish each measured invocation before starting the next query.
+                // Output and flushing are outside the timed public API call.
+                if (printf ("%s\t%.9f\t%zu\n", number, seconds, count) < 0 ||
+                    fflush (stdout) != 0)
+                {
+                    fprintf (stderr, "could not write results: %s\n", strerror (errno)) ;
+                    failed = true ;
+                    goto cleanup ;
+                }
+                if (samples != NULL &&
+                    (fprintf (samples, "%s\t%zu\n", number, count) < 0 ||
+                     fflush (samples) != 0))
+                {
+                    fprintf (stderr, "%s: %s\n", samples_path, strerror (errno)) ;
+                    failed = true ;
+                    goto cleanup ;
+                }
             }
         }
-    }
-    printf ("query\ttime_seconds\tpaths\n") ;
-    for (size_t q = 0 ; q < query_count ; q++)
-    {
-        if (results[q].failed) continue ;
-        const char *prefix = argv[first_query + q] ;
-        const char *number = strrchr (prefix, '/') ;
-        number = number == NULL ? prefix : number + 1 ;
-        printf ("%s\t%.9f\t%zu\n", number,
-            results[q].seconds / iterations, results[q].paths) ;
     }
 cleanup:
     if (samples != NULL && fclose (samples) != 0)
@@ -316,7 +314,6 @@ cleanup:
     if (graph != NULL)
         for (long k = 0 ; k < n ; k++) LAGraph_Delete (&graph[k].graph, NULL) ;
     LAGraph_Free ((void **) &graph, NULL) ;
-    LAGraph_Free ((void **) &results, NULL) ;
     if (info != GrB_SUCCESS) fprintf (stderr, "info=%d %s\n", info, msg) ;
     LAGraph_Finalize (NULL) ;
     return (failed || info != GrB_SUCCESS ? EXIT_FAILURE : EXIT_SUCCESS) ;

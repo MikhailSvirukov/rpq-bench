@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory() as temporary:
             subprocess.run(command, check=True)
             lines = (output / 'results.tsv').read_text().splitlines()
             assert lines[0] == 'query\ttime_seconds\tpaths', lines
-            assert [line.split('\t')[::2] for line in lines[1:]] == [['1', '1'], ['2', '1'], ['3', '2'], ['4', '1']], lines
+            assert [line.split('\t')[::2] for line in lines[1:]] == [['1', '1'], ['2', '1'], ['3', '2'], ['4', '1']] * 2, lines
             metadata = json.loads((output / 'run.json').read_text())
             assert metadata['exit_code'] == 0 and metadata['verify'] == verify
             assert (output / 'samples.tsv').exists() == verify
@@ -49,10 +49,55 @@ with tempfile.TemporaryDirectory() as temporary:
                 command.append('--verify')
             subprocess.run(command, check=True)
             lines = (output / 'results.tsv').read_text().splitlines()
-            assert [line.split('\t')[::2] for line in lines[1:]] == [['single query', '1']], lines
+            assert [line.split('\t')[::2] for line in lines[1:]] == [['single query', '1']] * 2, lines
             metadata = json.loads((output / 'run.json').read_text())
             assert metadata['exit_code'] == 0 and metadata['verify'] == verify
             assert metadata['build']['lagraph_commit'] == metadata['lagraph_commit']
+    # Block the next query on a FIFO: the previous row must already be in
+    # the output file while the driver is still running, even with buffering.
+    import os
+    import time
+    blocked = base / 'blocked'
+    blocked.mkdir()
+    os.mkfifo(blocked / 'meta.txt')
+    live_results = base / 'live.tsv'
+    with live_results.open('w') as stream:
+        process = subprocess.Popen([str(root / 'build/rpq_paths_benchmark'),
+                                    'trails', '0', '1', '1', '7', str(matrices / '7.txt'),
+                                    str(queries / '1'), str(blocked), str(queries / '4')],
+                                   stdout=stream, stderr=subprocess.PIPE, text=True)
+        writer = None
+        try:
+            deadline = time.monotonic() + 10
+            while writer is None:
+                try:
+                    writer = os.open(blocked / 'meta.txt', os.O_WRONLY | os.O_NONBLOCK)
+                except OSError as exc:
+                    import errno
+                    if exc.errno != errno.ENXIO:
+                        raise
+                    assert process.poll() is None, 'driver exited before next query'
+                    assert time.monotonic() < deadline, 'driver did not reach next query'
+                    time.sleep(0.01)
+            assert process.poll() is None
+            lines = live_results.read_text().splitlines()
+            assert lines[0] == 'query\ttime_seconds\tpaths', lines
+            assert len(lines) == 2 and lines[1].split('\t')[::2] == ['1', '1'], lines
+            assert float(lines[1].split('\t')[1]) >= 0
+            # Let the blocked query fail, then ensure later queries still run.
+            os.write(writer, b'invalid metadata\n')
+            os.close(writer)
+            writer = None
+            _, errors = process.communicate(timeout=10)
+            assert process.returncode != 0 and 'blocked' in errors, errors
+            lines = live_results.read_text().splitlines()
+            assert [line.split('\t')[::2] for line in lines[1:]] == [['1', '1'], ['4', '1']], lines
+        finally:
+            if writer is not None:
+                os.close(writer)
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
     # Python rejects unsupported endpoints before starting the C executable.
     fixed = queries / '5'
     fixed.mkdir()
