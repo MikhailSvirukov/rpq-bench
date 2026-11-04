@@ -63,3 +63,53 @@ continue. Set `LAGRAPH_RPQ_TRACE=1` to log the active query and pass.
 
 Add `--verify` to check input files and repeated path counts in Python.
 Verification is disabled by default; the C algorithm assumes valid inputs.
+
+## Memory sampling (Linux)
+
+Add `--memory --output <directory>` to sample the C driver's resident memory
+(RSS) and virtual address space in a separate Python monitor process. Sampling
+defaults to every 20 ms; `--memory-interval-ms` accepts a positive finite value:
+
+```bash
+python3 scripts/rpq_paths_bench.py /path/to/queries /path/to/matrices \
+  --semantics trails --warmup 1 --iterations 5 \
+  --memory --memory-interval-ms 20 --output results/trails
+```
+
+The graph remains loaded once in a single C process for the entire batch.
+The monitor reads `VmRSS` and `VmSize` from `/proc/<driver-pid>/status`, converts
+them to bytes, and uses the driver's existing stderr progress markers to delimit
+each algorithm call. No C source or algorithm changes are needed. The driver
+must support the current `RPQ_BENCH_PROCESS` markers; missing markers cause a
+profiling error instead of a successful empty report. Memory mode enables those
+markers automatically and saves them in `errors.log`; add `--process` to also
+show them in the terminal. `results.tsv` and stdout keep their existing format.
+
+Three additional files are written, replacing existing files of the same names:
+
+- `memory.tsv`: one row per invocation, including warmups and repeated passes.
+  Columns are `query`, `phase`, `pass`, `status`, `info`, `start_ns`, `end_ns`,
+  `samples`, `rss_min_bytes`, `rss_max_bytes`, `vms_min_bytes`, `vms_max_bytes`.
+  `info` is the algorithm's return code. Status is `ok`, `algorithm_error`,
+  `not_started` (no algorithm start observed), or `incomplete` (no return observed).
+  Missing boundaries/codes and extrema without samples are empty, not zero.
+  Rows are flushed when the algorithm returns, a new query starts, or the
+  monitor exits, including normal failure and interrupt cleanup.
+- `memory_samples.tsv`: raw `timestamp_ns`, `rss_bytes`, `vms_bytes` samples
+  throughout the driver's lifetime, including loading and cleanup.
+- `memory_events.tsv`: `timestamp_ns`, `event`, `query`, `phase`, `pass`, `info`
+  for received `query_begin`, `algorithm_begin`, and `algorithm_end` markers.
+
+All timestamps use the monitor's monotonic clock in nanoseconds. Summary
+extrema use only samples between the received algorithm start and end markers;
+loading the query's NFA and freeing results are outside that interval. Sampling
+settings, scope, and filenames are also recorded in `run.json`.
+
+These are **sampled extrema**, not guaranteed peaks. Scheduler delays can make
+the actual interval longer; missed ticks are skipped. A query shorter than the
+interval can have zero samples. Marker receipt is asynchronous, so attribution
+near a boundary is approximate. RSS accounting in `/proc` is itself approximate.
+Both metrics describe the whole driver process, including the graph, libraries,
+and allocations retained from earlier queries; they do not isolate allocations
+made by one query. Virtual address space is not physical RAM usage. Monitoring
+and progress output add overhead. The monitor's own memory is excluded.

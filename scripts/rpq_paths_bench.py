@@ -7,11 +7,18 @@ import subprocess
 import sys
 import json
 import os
+import math
+import signal
 import tempfile
 from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
 
 from inputs import validate_queries, validate_samples
+
+
+class BenchmarkInterrupted(Exception):
+    def __init__(self, signum):
+        self.signum = signum
 
 
 def forward_lines(source, *destinations):
@@ -21,7 +28,7 @@ def forward_lines(source, *destinations):
             destination.flush()
 
 
-def run_driver(command, results, stderr, environment, progress=False):
+def run_driver(command, results, stderr, environment, progress=False, monitor=False):
     if results is None:
         return subprocess.run(command, stderr=stderr, env=environment,
                               check=False).returncode
@@ -39,8 +46,19 @@ def run_driver(command, results, stderr, environment, progress=False):
                     errors.result()
                 return status
             except BaseException:
-                process.kill()
-                process.wait()
+                # Let the memory monitor stop and reap its C child and close reports.
+                if monitor:
+                    signal.signal(signal.SIGINT, signal.SIG_IGN)
+                    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                    process.terminate()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                else:
+                    process.kill()
+                    process.wait()
                 raise
 
 
@@ -65,9 +83,19 @@ def main():
                         help="verify input files and repeated path counts in Python")
     parser.add_argument("--process", action="store_true",
                         help="show loading stages and active queries on stderr, also with --output")
+    parser.add_argument("--memory", action="store_true",
+                        help="sample driver RSS and virtual memory in a separate process (Linux; requires --output)")
+    parser.add_argument("--memory-interval-ms", type=float, default=20,
+                        help="memory sampling interval in milliseconds (default: 20)")
     args = parser.parse_args()
     if args.warmup < 0 or args.iterations < 1:
         parser.error("--warmup must be nonnegative and --iterations must be positive")
+    if not math.isfinite(args.memory_interval_ms) or args.memory_interval_ms <= 0:
+        parser.error("--memory-interval-ms must be finite and positive")
+    if args.memory and args.output is None:
+        parser.error("--memory requires --output")
+    if args.memory and (not sys.platform.startswith("linux") or not Path("/proc/self/status").is_file()):
+        parser.error("--memory requires Linux procfs mounted at /proc")
     driver = args.build_dir / "rpq_paths_benchmark"
     if not driver.is_file():
         parser.error(f"missing {driver}; build the rpq_paths_benchmark CMake target first")
@@ -138,21 +166,51 @@ def main():
         build_info = args.build_dir / "build-info.json"
         metadata = {"command": command, "semantics": args.semantics,
                     "verify": args.verify, "process": args.process,
+                    "memory": args.memory,
                     "warmup": args.warmup, "iterations": args.iterations,
                     "lagraph_commit": revision(root / "LAGraph"),
                     "graphblas_commit": revision(root / "GraphBLAS")}
         if build_info.is_file():
             metadata["build"] = json.loads(build_info.read_text())
+        if args.memory:
+            metadata["memory_profile"] = {
+                "interval_ms": args.memory_interval_ms,
+                "scope": "algorithm call; whole driver process",
+                "source": "/proc/<pid>/status: VmRSS, VmSize",
+                "clock": "monotonic_ns",
+                "boundaries": "stderr marker receipt times",
+                "summary": "memory.tsv", "samples": "memory_samples.tsv",
+                "events": "memory_events.tsv"}
         environment = os.environ.copy()
         environment.pop("RPQ_BENCH_VERIFY_SAMPLES", None)
         environment.pop("RPQ_BENCH_PROCESS", None)
-        if args.process:
+        if args.process or args.memory:
             environment["RPQ_BENCH_PROCESS"] = "1"
         if args.verify:
             samples = ((args.output / "samples.tsv") if args.output is not None else
                        Path(stack.enter_context(tempfile.TemporaryDirectory())) / "samples.tsv")
             environment["RPQ_BENCH_VERIFY_SAMPLES"] = str(samples.resolve())
-        status = run_driver(command, results, stderr, environment, args.process)
+        launch_command = command
+        if args.memory:
+            launch_command = [sys.executable, str(Path(__file__).with_name("memory_monitor.py")),
+                              "--output", str(args.output.resolve()),
+                              "--interval-ms", str(args.memory_interval_ms),
+                              "--expected-invocations", str(len(queries) * (args.warmup + args.iterations)),
+                              "--", *command]
+        previous_handlers = {}
+        if args.memory:
+            def interrupted(signum, frame):
+                raise BenchmarkInterrupted(signum)
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                previous_handlers[signum] = signal.signal(signum, interrupted)
+        try:
+            status = run_driver(launch_command, results, stderr, environment, args.process,
+                                monitor=args.memory)
+        except BenchmarkInterrupted as exc:
+            status = 128 + exc.signum
+        finally:
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
         if args.verify and status == 0:
             try:
                 validate_samples(samples)
