@@ -70,6 +70,32 @@ with tempfile.TemporaryDirectory() as temporary:
             metadata = json.loads((output / 'run.json').read_text())
             assert metadata['exit_code'] == 0 and metadata['verify'] == verify
             assert metadata['build']['lagraph_commit'] == metadata['lagraph_commit']
+    # The new result ABI returns shared prefix chains.  Exercise two paths
+    # sharing 0->1, repeated freeing across passes, and real memory markers.
+    shared = base / 'shared prefixes'
+    shared.mkdir()
+    (shared / 'meta.txt').write_text('1 0\n1 1\n1 3\n1 7\n')
+    (shared / '7.txt').write_text('%%MatrixMarket matrix coordinate pattern general\n3 3 2\n1 2\n2 3\n')
+    shared_matrix = base / 'shared-graph.mtx'
+    shared_matrix.write_text('%%MatrixMarket matrix coordinate pattern general\n4 4 3\n1 2\n2 3\n2 4\n')
+    import csv
+    for semantics in ('all', 'simple', 'trails', 'shortest'):
+        output = base / f'shared-{semantics}'
+        command = [sys.executable, str(root / 'scripts/rpq_paths_bench.py'),
+                   str(shared), f'7={shared_matrix}', '--semantics', semantics,
+                   '--warmup', '1', '--iterations', '2', '--verify', '--memory',
+                   '--output', str(output)]
+        result = subprocess.run(command, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr + (output / 'errors.log').read_text()
+        assert result.stdout == (output / 'results.tsv').read_text()
+        assert [row.split('\t')[::2] for row in result.stdout.splitlines()[1:]] == [['shared prefixes', '2']] * 2
+        metadata = json.loads((output / 'run.json').read_text())
+        assert metadata['exit_code'] == 0
+        assert metadata['build']['lagraph_commit'] == metadata['lagraph_commit']
+        with (output / 'memory.tsv').open() as stream:
+            observations = list(csv.DictReader(stream, delimiter='\t'))
+        assert len(observations) == 3 and all(row['status'] == 'ok' for row in observations), observations
+        assert [row['phase'] for row in observations] == ['warmup', 'measured', 'measured'], observations
     # Block the next query on a FIFO: the previous row must already be in
     # the output file while the driver is still running, even with buffering.
     import os

@@ -202,9 +202,11 @@ static int run_query
     *count = path_count ;
 cleanup:
     if (meta != NULL) fclose (meta) ;
+    // Result descriptors share prefix nodes.  Release the whole result once
+    // through LAGraph; individual tails/prefixes must not be freed separately.
+    LAGraph_2RpqPath_FreePaths (&paths, path_count, NULL) ;
     if (R != NULL)
         for (size_t a = 0 ; a < nl ; a++) LAGraph_Delete (&R[a], NULL) ;
-    LAGraph_2RpqPath_FreePaths (&paths, path_count, NULL) ;
     LAGraph_Free ((void **) &path, NULL) ;
     LAGraph_Free ((void **) &QS, NULL) ;
     LAGraph_Free ((void **) &QF, NULL) ;
