@@ -3,4 +3,4 @@
 	url = https://github.com/MikhailSvirukov/LAGraph.git
 [submodule "GraphBLAS"]
 	path = GraphBLAS
-	url = https://github.com/DrTimothyAldenDavis/GraphBLAS.git
+	url = git@github.com:MikhailSvirukov/GraphBLAS.git
