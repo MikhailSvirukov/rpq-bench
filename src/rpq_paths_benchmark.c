@@ -26,9 +26,9 @@ static void progress (const char *format, ...)
 
 typedef int (*QueryFunction)
 (
-    LAGraph_RpqPath **, size_t *, LAGraph_Graph *, const bool *, size_t,
+    LAGraph_RpqPath **, size_t *, LAGraph_Graph *, size_t,
     const GrB_Index *, size_t, const GrB_Index *, size_t, LAGraph_Graph *,
-    const GrB_Index *, size_t, bool, char *
+    const GrB_Index *, size_t, char *
 ) ;
 
 /** Read a Matrix Market matrix directly and materialize it by row.
@@ -99,12 +99,42 @@ typedef struct
 {
     const char *label ;             // borrowed canonical label name from argv
     LAGraph_Graph graph ;           // owned; loaded once for the whole batch
+    LAGraph_Graph transposed ;      // owned; materialized once when needed
 }
 GraphLabel ;
 
+/** Materialize the other graph direction before any algorithm timing.
+ * @param[out] result Receives an owned row-major graph; NULL on error.
+ * @param[in] source Borrowed graph with Boolean-compatible adjacency values.
+ * @param[out] msg Optional LAGRAPH_MSG_LEN-byte error buffer.
+ */
+static int transpose_graph
+(
+    LAGraph_Graph *result, LAGraph_Graph source, char *msg
+)
+{
+    *result = NULL ;
+    GrB_Matrix A = NULL ;
+    GrB_Index n = 0 ;
+    int info = GrB_Matrix_nrows (&n, source->A) ;
+    if (info != GrB_SUCCESS) goto cleanup ;
+    info = GrB_Matrix_new (&A, GrB_BOOL, n, n) ;
+    if (info != GrB_SUCCESS) goto cleanup ;
+    info = GrB_set (A, GrB_ROWMAJOR, GrB_STORAGE_ORIENTATION_HINT) ;
+    if (info != GrB_SUCCESS) goto cleanup ;
+    info = GrB_transpose (A, NULL, NULL, source->A, NULL) ;
+    if (info != GrB_SUCCESS) goto cleanup ;
+    info = GrB_Matrix_wait (A, GrB_MATERIALIZE) ;
+    if (info != GrB_SUCCESS) goto cleanup ;
+    info = LAGraph_New (result, &A, LAGraph_ADJACENCY_DIRECTED, msg) ;
+cleanup:
+    GrB_free (&A) ;
+    return (info) ;
+}
+
 /** Load one query, call the API and release all query resources.
  * @param[in] prefix Query directory containing meta.txt and signed label matrices.
- * @param[in] graph Borrowed graph labels, loaded once for the whole batch.
+ * @param[in,out] graph Graph labels with lazily prepared owned transposes.
  * @param[in] graph_count Number of graph labels.
  * @param[in] query Selected public query function.
  * @param[out] seconds Receives the elapsed time of the public query call.
@@ -115,7 +145,7 @@ GraphLabel ;
  */
 static int run_query
 (
-    const char *prefix, const GraphLabel *graph,
+    const char *prefix, GraphLabel *graph,
     size_t graph_count, QueryFunction query,
     double *seconds, size_t *count, char *msg
 )
@@ -124,11 +154,10 @@ static int run_query
     char *path = NULL ;
     GrB_Index *QS = NULL, *QF = NULL, *S = NULL ;
     LAGraph_Graph *G = NULL, *R = NULL ;
-    bool *inverse_labels = NULL ;
     LAGraph_RpqPath *paths = NULL ;
     size_t nqs = 0, nqf = 0, ns = 0, nl = 0, path_count = 0 ;
     uint64_t source = 0, target = 0 ;
-    bool inverse = false ;
+    bool single_destination = false ;
     size_t path_size = strlen (prefix) + 64 ;
     int info = LAGraph_Malloc ((void **) &path, path_size, 1, msg) ;
     if (info != GrB_SUCCESS) goto cleanup ;
@@ -145,7 +174,7 @@ static int run_query
         info = GrB_INVALID_VALUE ;
         goto cleanup ;
     }
-    inverse = source == 0 && target != 0 ;
+    single_destination = source == 0 && target != 0 ;
     info = read_states (meta, &QS, &nqs, msg) ;
     if (info != GrB_SUCCESS) goto cleanup ;
     info = read_states (meta, &QF, &nqf, msg) ;
@@ -159,8 +188,6 @@ static int run_query
     if (info != GrB_SUCCESS) goto cleanup ;
     info = LAGraph_Calloc ((void **) &R, nl, sizeof (LAGraph_Graph), msg) ;
     if (info != GrB_SUCCESS) goto cleanup ;
-    info = LAGraph_Calloc ((void **) &inverse_labels, nl, sizeof (bool), msg) ;
-    if (info != GrB_SUCCESS) goto cleanup ;
     for (size_t a = 0 ; a < nl ; a++)
     {
         int64_t label ;
@@ -173,32 +200,55 @@ static int run_query
         uint64_t magnitude = label < 0 ? -(uint64_t) label : (uint64_t) label ;
         snprintf (name, sizeof (name), "%" PRIu64, magnitude) ;
         for (size_t k = 0 ; k < graph_count ; k++)
-            if (!strcmp (graph[k].label, name)) G[a] = graph[k].graph ;
-        inverse_labels[a] = label < 0 ;
+        {
+            if (strcmp (graph[k].label, name)) continue ;
+            if (single_destination != (label < 0))
+            {
+                if (graph[k].transposed == NULL)
+                {
+                    progress ("graph label %s: materializing transpose", name) ;
+                    info = transpose_graph (&graph[k].transposed, graph[k].graph, msg) ;
+                    if (info != GrB_SUCCESS) goto cleanup ;
+                }
+                G[a] = graph[k].transposed ;
+            }
+            else G[a] = graph[k].graph ;
+            break ;
+        }
         snprintf (path, path_size, "%s/%" PRId64 ".txt", prefix, label) ;
         info = read_graph (&R[a], path, msg) ;
         if (info != GrB_SUCCESS) goto cleanup ;
+        if (single_destination)
+        {
+            info = GrB_transpose (R[a]->A, NULL, NULL, R[a]->A, NULL) ;
+            if (info != GrB_SUCCESS) goto cleanup ;
+            info = GrB_Matrix_wait (R[a]->A, GrB_MATERIALIZE) ;
+            if (info != GrB_SUCCESS) goto cleanup ;
+        }
     }
     fclose (meta) ;
     meta = NULL ;
     GrB_Index ng = 0 ;
     info = GrB_Matrix_nrows (&ng, G[0]->A) ;
     if (info != GrB_SUCCESS) goto cleanup ;
-    ns = source != 0 || inverse ? 1 : (size_t) ng ;
+    ns = source != 0 || single_destination ? 1 : (size_t) ng ;
     info = LAGraph_Malloc ((void **) &S, ns, sizeof (GrB_Index), msg) ;
     if (info != GrB_SUCCESS) goto cleanup ;
     if (source != 0) S[0] = source - 1 ;
-    else if (inverse) S[0] = target - 1 ;
+    else if (single_destination) S[0] = target - 1 ;
     else for (size_t k = 0 ; k < ns ; k++) S[k] = k ;
 
     progress ("query %s: running algorithm", prefix) ;
     double begin = LAGraph_WallClockTime ( ) ;
-    info = query (&paths, &path_count, R, inverse_labels, nl,
-        inverse ? QF : QS, inverse ? nqf : nqs,
-        inverse ? QS : QF, inverse ? nqs : nqf, G, S, ns, inverse, msg) ;
+    info = query (&paths, &path_count, R, nl,
+        single_destination ? QF : QS, single_destination ? nqf : nqs,
+        single_destination ? QS : QF, single_destination ? nqs : nqf,
+        G, S, ns, msg) ;
     *seconds = LAGraph_WallClockTime ( ) - begin ;
     progress ("query %s: algorithm returned (info=%d)", prefix, info) ;
     if (info != GrB_SUCCESS) goto cleanup ;
+    // SD paths follow the prepared graph from target to source.  This driver
+    // exports counts only, so no reversal or copying of result nodes is needed.
     *count = path_count ;
 cleanup:
     if (meta != NULL) fclose (meta) ;
@@ -213,7 +263,6 @@ cleanup:
     LAGraph_Free ((void **) &S, NULL) ;
     LAGraph_Free ((void **) &G, NULL) ;
     LAGraph_Free ((void **) &R, NULL) ;
-    LAGraph_Free ((void **) &inverse_labels, NULL) ;
     if (info != GrB_SUCCESS && msg != NULL && msg[0] == '\0')
         snprintf (msg, LAGRAPH_MSG_LEN, "could not read or run query in %s", prefix) ;
     return (info) ;
@@ -343,7 +392,11 @@ cleanup:
         failed = true ;
     }
     if (graph != NULL)
-        for (long k = 0 ; k < n ; k++) LAGraph_Delete (&graph[k].graph, NULL) ;
+        for (long k = 0 ; k < n ; k++)
+        {
+            LAGraph_Delete (&graph[k].transposed, NULL) ;
+            LAGraph_Delete (&graph[k].graph, NULL) ;
+        }
     LAGraph_Free ((void **) &graph, NULL) ;
     if (info != GrB_SUCCESS) fprintf (stderr, "info=%d %s\n", info, msg) ;
     LAGraph_Finalize (NULL) ;

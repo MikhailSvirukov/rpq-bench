@@ -96,6 +96,45 @@ with tempfile.TemporaryDirectory() as temporary:
             observations = list(csv.DictReader(stream, delimiter='\t'))
         assert len(observations) == 3 and all(row['status'] == 'ok' for row in observations), observations
         assert [row['phase'] for row in observations] == ['warmup', 'measured', 'measured'], observations
+    # Two-step words must reverse both their label order and NFA transitions
+    # for SD. Mixed signs test direction cancellation; +/-7 share one cached
+    # graph label and must remain safe across queries and repeated passes.
+    prepared = base / 'prepared directions'
+    prepared.mkdir()
+    prepared_matrices = base / 'prepared matrices'
+    prepared_matrices.mkdir()
+    (prepared_matrices / '7.txt').write_text(
+        '%%MatrixMarket matrix coordinate pattern general\n4 4 2\n1 2\n1 3\n')
+    (prepared_matrices / '8.txt').write_text(
+        '%%MatrixMarket matrix coordinate pattern general\n4 4 2\n4 2\n4 3\n')
+    cases = [(1, '1 0', (7, -8)), (2, '0 4', (7, -8)),
+             (3, '4 0', (8, -7)), (4, '0 1', (8, -7)),
+             (5, '1 0', (7, -7)), (6, '0 1', (7, -7))]
+    for number, endpoints, labels in cases:
+        directory = prepared / str(number)
+        directory.mkdir()
+        (directory / 'meta.txt').write_text(
+            f'{endpoints}\n1 1\n1 3\n2 {labels[0]} {labels[1]}\n')
+        for state, label in enumerate(labels, 1):
+            (directory / f'{label}.txt').write_text(
+                f'%%MatrixMarket matrix coordinate pattern general\n3 3 1\n{state} {state + 1}\n')
+    for semantics in ('all', 'simple', 'trails', 'shortest'):
+        output = base / f'prepared-{semantics}'
+        result = subprocess.run(
+            [sys.executable, str(root / 'scripts/rpq_paths_bench.py'),
+             str(prepared), str(prepared_matrices), '--semantics', semantics,
+             '--warmup', '1', '--iterations', '2', '--verify', '--process',
+             '--output', str(output)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        expected = [[str(number), '0' if semantics == 'simple' and number >= 5 else '2']
+                    for number, _, _ in cases]
+        assert [row.split('\t')[::2] for row in result.stdout.splitlines()[1:]] == expected * 2
+        # Preparing a graph transpose happens once, outside algorithm markers.
+        for label in (7, 8):
+            marker = f'graph label {label}: materializing transpose'
+            assert result.stderr.count(marker) == 1, result.stderr
+        assert result.stderr.index('graph label 8: materializing transpose') < result.stderr.index(
+            f'query {prepared / "1"}: running algorithm')
     # Block the next query on a FIFO: the previous row must already be in
     # the output file while the driver is still running, even with buffering.
     import os
@@ -160,4 +199,4 @@ with tempfile.TemporaryDirectory() as temporary:
     subprocess.run([sys.executable, str(root / 'scripts/download_data.py'),
                     '--queries-url', Path(qzip).as_uri(), '--matrices-url', Path(mzip).as_uri(),
                     '--output', str(base / 'downloaded'), '--verify'], check=True)
-print('Smoke tests passed: single/batch queries, four semantics with/without --verify, inverse/backward queries, any-any filtering, repeated passes, download.')
+print('Smoke tests passed: single/batch queries, four semantics with/without --verify, prepared SD/backward queries, any-any filtering, repeated passes, download.')

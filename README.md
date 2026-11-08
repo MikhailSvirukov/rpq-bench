@@ -63,8 +63,14 @@ available if a later query fails or the process is interrupted. Use
 
 Only the
 public algorithm call is timed, including its workspace setup and path
-reconstruction. File reading and freeing returned paths are outside the timer.
-Graph matrices are loaded once; each invocation reloads its NFA. Failed invocations
+reconstruction. File reading, explicit transposition and freeing returned paths
+are outside the timer. Graph matrices are loaded once; their transposes are
+materialized on first use and reused across queries and passes. Each invocation
+reloads its NFA. For single-destination queries, the driver transposes the NFA,
+swaps its initial/accepting states and uses the destination as the source.
+Backward labels select the opposite graph matrix. The algorithm always receives
+prepared directions and uses GraphBLAS AUTO multiplication. Returned paths follow
+those directions; the benchmark exports counts only. Failed invocations
 produce no result row and cause a nonzero exit status; other queries
 continue. Set `LAGRAPH_RPQ_TRACE=1` to log the active query and pass.
 
