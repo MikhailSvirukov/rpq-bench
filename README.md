@@ -131,7 +131,7 @@ and progress output add overhead. The monitor's own memory is excluded.
 
 This branch pins GraphBLAS 10.5.2 to `origin/stable` of the configured fork
 (`77013904177e18e191dc7b41c23de9c6bc36a2e9`) and LAGraph to
-`feb4eedf28b6d1e1d4f37c8f10a31204aa12d25d` (AUTO and internal profiling).
+`13567a70bdf954e34caaa13ae6fabc0b574cb109` (AUTO and internal profiling).
 The earlier custom GraphBLAS SAXPY patch is not applied on this branch.
 Regular submodule updates use these exact commits; `branch = stable` controls
 explicit `git submodule update --remote GraphBLAS` only.
