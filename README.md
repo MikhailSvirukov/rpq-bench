@@ -69,7 +69,7 @@ materialized on first use and reused across queries and passes. Each invocation
 reloads its NFA. For single-destination queries, the driver transposes the NFA,
 swaps its initial/accepting states and uses the destination as the source.
 Backward labels select the opposite graph matrix. The algorithm always receives
-prepared directions and uses GraphBLAS SAXPY for both matrix products. Returned paths follow
+prepared directions and uses GraphBLAS AUTO for both matrix products. Returned paths follow
 those directions; the benchmark exports counts only. Failed invocations
 produce no result row and cause a nonzero exit status; other queries
 continue. Set `LAGRAPH_RPQ_TRACE=1` to log the active query and pass.
@@ -126,3 +126,39 @@ Both metrics describe the whole driver process, including the graph, libraries,
 and allocations retained from earlier queries; they do not isolate allocations
 made by one query. Virtual address space is not physical RAM usage. Monitoring
 and progress output add overhead. The monitor's own memory is excluded.
+
+## Algorithm profiling with stable GraphBLAS
+
+This branch pins GraphBLAS 10.5.2 to `origin/stable` of the configured fork
+(`77013904177e18e191dc7b41c23de9c6bc36a2e9`) and LAGraph to
+`feb4eedf28b6d1e1d4f37c8f10a31204aa12d25d` (AUTO and internal profiling).
+The earlier custom GraphBLAS SAXPY patch is not applied on this branch.
+Regular submodule updates use these exact commits; `branch = stable` controls
+explicit `git submodule update --remote GraphBLAS` only.
+
+To record algorithm internals, set the environment variable before running the
+existing benchmark command. It is inherited by the C driver:
+
+```bash
+mkdir -p results/profile
+LG_RPQ_PROFILE="$PWD/results/profile/run" \
+  python3 scripts/rpq_paths_bench.py /path/to/queries /path/to/matrices \
+    --semantics trails --warmup 0 --iterations 1 --output results/trails
+python3 LAGraph/experimental/benchmark/rpq_profile.py 'results/profile/*.tsv' > results/profile-summary.tsv
+```
+
+Use a new profile prefix/directory for each run. Profiles include every algorithm
+call, including warmups when enabled. For per-iteration/per-label summaries and
+metric definitions, see [the profiling guide](LAGraph/experimental/benchmark/rpq_profile.md).
+Profiling adds synchronization and scanning overhead inside the timed call.
+
+### Stable compatibility check
+
+The benchmark builds with these pins and the 20 Python unit tests pass.
+The full `tests/smoke.py` suite currently fails on the shared-prefix case
+(two paths through graph edges `0->1`, `1->2`, `1->3`, with a two-edge NFA).
+The C driver exits with SIGSEGV, both with profiling disabled and enabled.
+The stable generic SAXPY implementation still contains the indexed-flip
+workspace code that motivated the earlier fork patch. The stable submodule is
+kept unmodified here; this branch is not a fully passing replacement for the
+patched GraphBLAS configuration.

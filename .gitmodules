@@ -4,3 +4,4 @@
 [submodule "GraphBLAS"]
 	path = GraphBLAS
 	url = git@github.com:MikhailSvirukov/GraphBLAS.git
+	branch = stable
