@@ -127,17 +127,16 @@ and allocations retained from earlier queries; they do not isolate allocations
 made by one query. Virtual address space is not physical RAM usage. Monitoring
 and progress output add overhead. The monitor's own memory is excluded.
 
-## Algorithm profiling with stable GraphBLAS
+## GraphBLAS and Bloom variant
 
-This branch pins GraphBLAS 10.5.2 to `origin/stable` of the configured fork
-(`77013904177e18e191dc7b41c23de9c6bc36a2e9`) and LAGraph to
-`93ddcf198100cda439aabb061588054442b1b7f7` (AUTO, growing P Bloom filters, persistent path filters and profiling).
-The earlier custom GraphBLAS SAXPY patch is not applied on this branch.
-Regular submodule updates use these exact commits; `branch = stable` controls
-explicit `git submodule update --remote GraphBLAS` only.
+This branch (`svmk17/rpq-bloom-profiling-stable`) pins patched GraphBLAS to `3bc5e352c0d147a2f752df73147a31f515f67569`
+from `svmk17/rpq-indexed-saxpy-fix` in the configured fork. The patch fixes
+generic indexed SAXPY operand-flip workspaces. Unpatched stable 10.5.2
+crashed on the shared-prefix smoke case and the Wikidata query 3 automaton.
 
-To record algorithm internals, set the environment variable before running the
-existing benchmark command. It is inherited by the C driver:
+LAGraph is pinned to `93ddcf198100cda439aabb061588054442b1b7f7`: AUTO,
+growing P filters, persistent prefix filters and internal metrics.
+The historical `-stable` branch suffix does not describe the new GraphBLAS pin.
 
 ```bash
 mkdir -p results/profile
@@ -147,33 +146,9 @@ LG_RPQ_PROFILE="$PWD/results/profile/run" \
 python3 LAGraph/experimental/benchmark/rpq_profile.py 'results/profile/*.tsv' > results/profile-summary.tsv
 ```
 
-Use a new profile prefix/directory for each run. Profiles include every algorithm
-call, including warmups when enabled. For per-iteration/per-label summaries and
-metric definitions, see [the profiling guide](LAGraph/experimental/benchmark/rpq_profile.md).
-Profiling adds synchronization and scanning overhead inside the timed call.
+Use a new profile prefix/directory per run; warmups are also profiled.
+See [metric definitions](LAGraph/experimental/benchmark/rpq_profile.md).
 
-### Stable compatibility check
-
-The benchmark builds with these pins and the 20 Python unit tests pass.
-The full `tests/smoke.py` suite currently fails on the shared-prefix case
-(two paths through graph edges `0->1`, `1->2`, `1->3`, with a two-edge NFA).
-The C driver exits with SIGSEGV, both with profiling disabled and enabled.
-The stable generic SAXPY implementation still contains the indexed-flip
-workspace code that motivated the earlier fork patch. The stable submodule is
-kept unmodified here; this branch is not a fully passing replacement for the
-patched GraphBLAS configuration.
-
-
-## Bloom profiling branch
-
-`svmk17/rpq-bloom-profiling-stable` pins the instrumented Bloom implementation.
-In LAGraph, `svmk17/rpq-paths-bloom` contains the implementation without metrics;
-`svmk17/rpq-paths-bloom-profiling` adds the compatible TSV profiler.
-The default output of `rpq_profile.py` now also includes P filter allocation and
-copying, parent-filter early exits, false positives and persistent tree memory.
-See [Bloom implementation details](LAGraph/experimental/algorithm/LAGraph_2RpqPath_bloom.md)
-and [profiling metric definitions](LAGraph/experimental/benchmark/rpq_profile.md).
-The full smoke test was rerun with this Bloom pin: the same shared-prefix case
-still terminates with SIGSEGV on stable GraphBLAS. Compilation and the 20 Python
-unit tests pass. The Bloom implementation also passes its RPQ and sanitizer tests
-against the locally patched GraphBLAS build; stable is kept unmodified here.
+See [Bloom implementation details](LAGraph/experimental/algorithm/LAGraph_2RpqPath_bloom.md).
+Regular submodule updates use pinned commits; the branch setting controls only
+explicit `git submodule update --remote`.
