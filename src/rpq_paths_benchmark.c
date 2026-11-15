@@ -272,12 +272,12 @@ cleanup:
 // (label graph_file)... query_prefixes...
 int main (int argc, char **argv)
 {
-    const char *profile_path = NULL, *jit_cache = NULL ;
-    while (argc > 1 && (strcmp (argv[1], "--profile") == 0 ||
+    const char *jit_log_path = NULL, *jit_cache = NULL ;
+    while (argc > 1 && (strcmp (argv[1], "--jit-error-log") == 0 ||
                        strcmp (argv[1], "--jit-cache") == 0))
     {
         if (argc < 3 || argv[2][0] == '\0') return (EXIT_FAILURE) ;
-        if (strcmp (argv[1], "--profile") == 0) profile_path = argv[2] ;
+        if (strcmp (argv[1], "--jit-error-log") == 0) jit_log_path = argv[2] ;
         else jit_cache = argv[2] ;
         argc -= 2 ; argv += 2 ;
     }
@@ -303,7 +303,7 @@ int main (int argc, char **argv)
     char msg [LAGRAPH_MSG_LEN] = "" ;
     GraphLabel *graph = NULL ;
     bool failed = false ;
-    FILE *samples = NULL, *profile = NULL ;
+    FILE *samples = NULL ;
     const char *samples_path = getenv ("RPQ_BENCH_VERIFY_SAMPLES") ;
     process_progress = getenv ("RPQ_BENCH_PROCESS") != NULL ;
     bool trace_queries = process_progress || getenv ("LAGRAPH_RPQ_TRACE") != NULL ;
@@ -325,35 +325,16 @@ int main (int argc, char **argv)
         }
         progress ("JIT cache: %s", jit_cache) ;
     }
-    if (profile_path != NULL)
+    if (jit_log_path != NULL)
     {
-        profile = fopen (profile_path, "w") ;
-        if (profile == NULL)
-        {
-            fprintf (stderr, "profile %s: %s\n", profile_path, strerror (errno)) ;
-            info = GrB_INVALID_VALUE ; goto cleanup ;
-        }
-        // Keep compiler diagnostics beside the algorithm profile. GraphBLAS
-        // otherwise discards compiler stderr when BURBLE is disabled.
-        const char *slash = strrchr (profile_path, '/') ;
-        size_t dir_len = slash == NULL ? 0 : (size_t) (slash - profile_path + 1) ;
-        const char *name = "jit-errors.log" ;
-        char *jit_log = malloc (dir_len + strlen (name) + 1) ;
-        if (jit_log == NULL) { info = GrB_OUT_OF_MEMORY ; goto cleanup ; }
-        memcpy (jit_log, profile_path, dir_len) ;
-        strcpy (jit_log + dir_len, name) ;
-        FILE *jit_file = fopen (jit_log, "w") ;
+        FILE *jit_file = fopen (jit_log_path, "w") ;
         if (jit_file == NULL)
         {
-            fprintf (stderr, "JIT log %s: %s\n", jit_log, strerror (errno)) ;
-            free (jit_log) ; info = GrB_INVALID_VALUE ; goto cleanup ;
+            fprintf (stderr, "JIT log %s: %s\n", jit_log_path, strerror (errno)) ;
+            info = GrB_INVALID_VALUE ; goto cleanup ;
         }
-        if (fclose (jit_file) != 0)
-        { free (jit_log) ; info = GrB_INVALID_VALUE ; goto cleanup ; }
-        info = GxB_Global_Option_set_CHAR (GxB_JIT_ERROR_LOG, jit_log) ;
-        free (jit_log) ;
-        if (info != GrB_SUCCESS) goto cleanup ;
-        info = LAGraph_2RpqPath_SetProfile (profile, NULL, 0, false, msg) ;
+        if (fclose (jit_file) != 0) { info = GrB_INVALID_VALUE ; goto cleanup ; }
+        info = GxB_Global_Option_set_CHAR (GxB_JIT_ERROR_LOG, jit_log_path) ;
         if (info != GrB_SUCCESS) goto cleanup ;
     }
     if (samples_path != NULL)
@@ -403,8 +384,6 @@ int main (int argc, char **argv)
                         phase == 0 ? "warmup" : "measured", pass + 1) ;
                     fflush (stderr) ;
                 }
-                info = LAGraph_2RpqPath_SetProfile (profile, number, (size_t) pass + 1, phase == 0, msg) ;
-                if (info != GrB_SUCCESS) goto cleanup ;
                 int query_info = run_query (prefix, graph, (size_t) n, query,
                     &seconds, &count, msg) ;
                 if (query_info != GrB_SUCCESS)
@@ -438,9 +417,7 @@ int main (int argc, char **argv)
         }
     }
 cleanup:
-    LAGraph_2RpqPath_SetProfile (NULL, NULL, 0, false, NULL) ;
-    if (profile != NULL && fclose (profile) != 0)
-    { fprintf (stderr, "profile %s: %s\n", profile_path, strerror (errno)) ; failed = true ; }
+
     if (samples != NULL && fclose (samples) != 0)
     {
         fprintf (stderr, "%s: %s\n", samples_path, strerror (errno)) ;

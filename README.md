@@ -127,48 +127,17 @@ and allocations retained from earlier queries; they do not isolate allocations
 made by one query. Virtual address space is not physical RAM usage. Monitoring
 and progress output add overhead. The monitor's own memory is excluded.
 
-## Algorithm profiling with patched GraphBLAS
+## Optimized algorithm and JIT diagnostics
 
-This branch pins GraphBLAS to `3bc5e352c0d147a2f752df73147a31f515f67569`
-from the configured fork (`svmk17/rpq-indexed-saxpy-fix`). The patch fixes generic
-indexed SAXPY operand-flip workspaces. Unpatched stable 10.5.2 crashed in the
-shared-prefix smoke case and with the automaton of Wikidata query 3.
+LAGraph is pinned to `a05fb37ae6596f6859250eb6e2077a2e7baf78a2`:
+AUTO multiplication, compact temporary blocks and masked P/frontier updates,
+without algorithm profiling. GraphBLAS remains pinned to patched fork commit
+`3bc5e352c0d147a2f752df73147a31f515f67569`.
 
-LAGraph is pinned to `23c88a1ab13798fe2fc7bd40584fb9c08904bf77` (AUTO and
-baseline profiling). The historical branch name still ends in `-stable`, but
-GraphBLAS now uses the patched commit. Regular submodule updates use the exact
-pinned commits; `branch` only controls explicit `submodule update --remote`.
-
-With `--output`, internal metrics are written automatically to `profile-results.tsv`
-in the result directory. No environment variable is required:
-
-```bash
-python3 scripts/rpq_paths_bench.py /path/to/queries /path/to/matrices \
-  --semantics trails --warmup 0 --iterations 1 --output results/trails
-python3 LAGraph/experimental/benchmark/rpq_profile.py results/trails/profile-results.tsv > results/trails/profile-summary.tsv
-```
-
-All calls, including warmups, share the file and carry query/pass/warmup and pid/call identifiers.
-A new benchmark run truncates this file along with the other result files.
-See [profiling details](LAGraph/experimental/benchmark/rpq_profile.md).
-Profiling adds synchronization and scanning overhead inside the timed call.
-
-
-### Shared algorithm profile file
-
-`--output DIR` explicitly passes `DIR/profile-results.tsv` to the C driver
-through `--profile PATH`. The driver opens it once in write mode and passes the
-stream and query context to LAGraph in code. Opening or writing failures cause a
-nonzero exit status; diagnostics go to errors.log. Without --output the profile
-is disabled. LG_RPQ_PROFILE and LG_RPQ_PROFILE_RUN_ID are no longer used.
-A new run overwrites profile-results.tsv. The header is flushed immediately;
-call identities and completed iteration buffers are also flushed during a run.
-
-With `--output DIR`, JIT compiler diagnostics are saved to `DIR/jit-errors.log`
-(the file is reset at the start of a run). Its path is recorded as `jit_error_log`
-in run.json. An empty file means no compiler stderr was recorded. The internal
-profile records `jit_after` after matrix operations to locate a transition out
-of JIT ON. This records diagnostics without changing the selected JIT mode.
+With `--output DIR`, JIT compiler diagnostics are saved to `DIR/jit-errors.log`.
+The file is reset at the start of each run; run.json records its path as
+`jit_error_log`. Algorithm profile-results.tsv is not generated. External process
+memory sampling with --memory remains available.
 
 Use `--jit-cache DIR` to place the GraphBLAS JIT cache on another filesystem:
 
@@ -182,4 +151,4 @@ which sets GxB_JIT_CACHE_PATH after initialization, before loading inputs.
 The flag also works without --output. With --output, run.json records jit_cache.
 Without the flag, the GraphBLAS default is retained. Existing cache files are
 not migrated and the JIT control mode is unchanged. The C driver accepts
---jit-cache DIR before the semantics argument, in either order with --profile.
+--jit-cache DIR before the semantics argument, in either order with --jit-error-log FILE.
