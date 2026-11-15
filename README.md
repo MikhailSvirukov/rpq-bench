@@ -169,3 +169,17 @@ With `--output DIR`, JIT compiler diagnostics are saved to `DIR/jit-errors.log`
 in run.json. An empty file means no compiler stderr was recorded. The internal
 profile records `jit_after` after matrix operations to locate a transition out
 of JIT ON. This records diagnostics without changing the selected JIT mode.
+
+Use `--jit-cache DIR` to place the GraphBLAS JIT cache on another filesystem:
+
+```sh
+python3 scripts/rpq_paths_bench.py QUERIES MATRICES --semantics shortest \
+    --jit-cache /mnt/big-disk/graphblas-jit/GrB10.5.0 --output results/wiki-shortest
+```
+
+Python creates the directory and passes its absolute path to the C driver,
+which sets GxB_JIT_CACHE_PATH after initialization, before loading inputs.
+The flag also works without --output. With --output, run.json records jit_cache.
+Without the flag, the GraphBLAS default is retained. Existing cache files are
+not migrated and the JIT control mode is unchanged. The C driver accepts
+--jit-cache DIR before the semantics argument, in either order with --profile.

@@ -272,9 +272,15 @@ cleanup:
 // (label graph_file)... query_prefixes...
 int main (int argc, char **argv)
 {
-    const char *profile_path = NULL ;
-    if (argc >= 3 && strcmp (argv[1], "--profile") == 0)
-    { profile_path = argv[2] ; argc -= 2 ; argv += 2 ; }
+    const char *profile_path = NULL, *jit_cache = NULL ;
+    while (argc > 1 && (strcmp (argv[1], "--profile") == 0 ||
+                       strcmp (argv[1], "--jit-cache") == 0))
+    {
+        if (argc < 3 || argv[2][0] == '\0') return (EXIT_FAILURE) ;
+        if (strcmp (argv[1], "--profile") == 0) profile_path = argv[2] ;
+        else jit_cache = argv[2] ;
+        argc -= 2 ; argv += 2 ;
+    }
     if (argc < 8) return (EXIT_FAILURE) ;
     QueryFunction query = NULL ;
     if (!strcmp (argv[1], "all")) query = LAGraph_2RpqPath_AllPaths ;
@@ -309,6 +315,16 @@ int main (int argc, char **argv)
         return (EXIT_FAILURE) ;
     }
     progress ("initialization complete") ;
+    if (jit_cache != NULL)
+    {
+        info = GxB_Global_Option_set_CHAR (GxB_JIT_CACHE_PATH, jit_cache) ;
+        if (info != GrB_SUCCESS)
+        {
+            fprintf (stderr, "JIT cache %s: info=%d\n", jit_cache, info) ;
+            goto cleanup ;
+        }
+        progress ("JIT cache: %s", jit_cache) ;
+    }
     if (profile_path != NULL)
     {
         profile = fopen (profile_path, "w") ;

@@ -90,6 +90,7 @@ def main():
                         help="benchmark CMake build directory (default: build)")
     parser.add_argument("--output", type=Path,
                         help="also save stdout results to results.tsv, plus errors.log and run.json")
+    parser.add_argument("--jit-cache", type=Path, help="GraphBLAS JIT cache directory (created if necessary)")
     parser.add_argument("--verify", action="store_true",
                         help="verify input files and repeated path counts in Python")
     parser.add_argument("--process", action="store_true",
@@ -166,6 +167,14 @@ def main():
     for label, path in matrices.items():
         command.extend([label, str(path.resolve())])
     command.extend(str(directory.resolve()) for directory in queries)
+    jit_cache = None
+    if args.jit_cache is not None:
+        jit_cache = args.jit_cache.expanduser().resolve()
+        try:
+            jit_cache.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            parser.error(f"cannot create JIT cache {jit_cache}: {exc}")
+        command[1:1] = ["--jit-cache", str(jit_cache)]
     with ExitStack() as stack:
         results = stderr = None
         if args.output is not None:
@@ -184,6 +193,7 @@ def main():
                     "memory": args.memory,
                     "algorithm_profile": str((args.output / "profile-results.tsv").resolve()) if args.output is not None else None,
                     "jit_error_log": str((args.output / "jit-errors.log").resolve()) if args.output is not None else None,
+                    "jit_cache": str(jit_cache) if jit_cache is not None else None,
                     "warmup": args.warmup, "iterations": args.iterations,
                     "lagraph_commit": revision(root / "LAGraph"),
                     "graphblas_commit": revision(root / "GraphBLAS")}
