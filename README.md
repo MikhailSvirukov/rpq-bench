@@ -129,10 +129,10 @@ and progress output add overhead. The monitor's own memory is excluded.
 
 ## Optimized algorithm and JIT diagnostics
 
-LAGraph is pinned to `a05fb37ae6596f6859250eb6e2077a2e7baf78a2`:
+LAGraph is pinned to `05894be7`:
 AUTO multiplication, compact temporary blocks and masked P/frontier updates,
 without algorithm profiling. GraphBLAS remains pinned to patched fork commit
-`3bc5e352c0d147a2f752df73147a31f515f67569`.
+`3e0b8cd3e1`.
 
 With `--output DIR`, JIT compiler diagnostics are saved to `DIR/jit-errors.log`.
 The file is reset at the start of each run; run.json records its path as
@@ -152,3 +152,10 @@ The flag also works without --output. With --output, run.json records jit_cache.
 Without the flag, the GraphBLAS default is retained. Existing cache files are
 not migrated and the JIT control mode is unchanged. The C driver accepts
 --jit-cache DIR before the semantics argument, in either order with --jit-error-log FILE.
+
+This branch includes RPQ C type definitions (without algorithm profiling) and
+the GraphBLAS select JIT fix. The fix distinguishes matrix UDTs in the cache
+and selects generic execution when the matrix type has no JIT definition.
+User-defined semiring operators still use generic kernels. See
+[LAGraph JIT notes](LAGraph/experimental/algorithm/LAGraph_2RpqPath_jit.md).
+Use --jit-cache DIR to select a cache on a filesystem with enough free space.
