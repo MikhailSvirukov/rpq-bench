@@ -33,7 +33,26 @@ with tempfile.TemporaryDirectory() as temporary:
             assert [line.split('\t')[::2] for line in lines[1:]] == [['1', '1'], ['2', '1'], ['4', '1']] * 2, lines
             metadata = json.loads((output / 'run.json').read_text())
             assert metadata['exit_code'] == 0 and metadata['verify'] == verify
+            profile = output / 'profile-results.tsv'
+            import csv, io
+            with profile.open() as stream:
+                records = list(csv.DictReader(stream, delimiter='\t'))
+            calls = {(row['pid'], row['call']) for row in records}
+            assert len(calls) == 9, calls  # 3 queries * (1 warmup + 2 measured)
+            ended = [row for row in records if row['phase'] == 'query' and row['event'] == 'end' and row['metric'] == 'status']
+            assert len(ended) == 9 and all(float(row['value']) == 0 for row in ended)
+            summary = subprocess.run([sys.executable, str(root / 'LAGraph/experimental/benchmark/rpq_profile.py'), str(profile)],
+                                     capture_output=True, text=True, check=True)
+            observations = list(csv.DictReader(io.StringIO(summary.stdout), delimiter='\t'))
+            assert len(observations) == 9 and all(row['complete'] == '1' for row in observations)
+            assert sum(row['warmup'] == '1' for row in observations) == 3
+            assert {row['query'] for row in observations} == {'1', '2', '4'}
             assert (output / 'samples.tsv').exists() == verify
+    bad_profile = base / 'missing-directory' / 'profile-results.tsv'
+    bad = subprocess.run([str(root / 'build/rpq_paths_benchmark'), '--profile', str(bad_profile),
+                          'all', '0', '1', '1', '7', str(matrices / '7.txt'), str(queries / '1')],
+                         capture_output=True, text=True)
+    assert bad.returncode != 0 and str(bad_profile) in bad.stderr
     # Real C diagnostics are opt-in and do not contaminate the result table.
     output = base / 'progress'
     result = subprocess.run([sys.executable, str(root / 'scripts/rpq_paths_bench.py'),

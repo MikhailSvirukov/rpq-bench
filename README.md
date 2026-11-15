@@ -134,16 +134,14 @@ from `svmk17/rpq-indexed-saxpy-fix` in the configured fork. The patch fixes
 generic indexed SAXPY operand-flip workspaces. Unpatched stable 10.5.2
 crashed on the shared-prefix smoke case and the Wikidata query 3 automaton.
 
-LAGraph is pinned to `93ddcf198100cda439aabb061588054442b1b7f7`: AUTO,
+LAGraph is pinned to `9459a4b2b31e01c7fa2dcfd5a4a0a0fcb73f7052`: AUTO,
 growing P filters, persistent prefix filters and internal metrics.
 The historical `-stable` branch suffix does not describe the new GraphBLAS pin.
 
 ```bash
-mkdir -p results/profile
-LG_RPQ_PROFILE="$PWD/results/profile/run" \
-  python3 scripts/rpq_paths_bench.py /path/to/queries /path/to/matrices \
-    --semantics trails --warmup 0 --iterations 1 --output results/trails
-python3 LAGraph/experimental/benchmark/rpq_profile.py 'results/profile/*.tsv' > results/profile-summary.tsv
+python3 scripts/rpq_paths_bench.py /path/to/queries /path/to/matrices \
+  --semantics trails --warmup 0 --iterations 1 --output results/trails
+python3 LAGraph/experimental/benchmark/rpq_profile.py results/trails/profile-results.tsv > results/trails/profile-summary.tsv
 ```
 
 Use a new profile prefix/directory per run; warmups are also profiled.
@@ -152,3 +150,16 @@ See [metric definitions](LAGraph/experimental/benchmark/rpq_profile.md).
 See [Bloom implementation details](LAGraph/experimental/algorithm/LAGraph_2RpqPath_bloom.md).
 Regular submodule updates use pinned commits; the branch setting controls only
 explicit `git submodule update --remote`.
+
+
+### Shared algorithm profile file
+
+`--output DIR` creates `DIR/profile-results.tsv` automatically. Python passes
+its absolute path with `--profile PATH` to the C driver, which opens it once and
+configures the LAGraph stream explicitly before each query. No environment
+variable is needed; LG_RPQ_PROFILE and LG_RPQ_PROFILE_RUN_ID are no longer used.
+The file is overwritten on a new run, like results.tsv. The header and call
+identifiers are flushed immediately; completed iterations are flushed as they
+finish. Failure to open or write the file makes the benchmark exit nonzero.
+Without --output profiling is disabled. Use rpq_profile.py on this single file;
+it produces one row per call and supports older per-call files as well.

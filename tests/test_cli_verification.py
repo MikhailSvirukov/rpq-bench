@@ -84,6 +84,7 @@ print('query\\ttime_seconds\\tpaths\\n1\\t0.1\\t2')
         driver.write_text(f'''#!{sys.executable}
 from pathlib import Path
 import os, sys
+if sys.argv[1:2] == ['--profile']: del sys.argv[1:3]
 samples = os.environ.get('RPQ_BENCH_VERIFY_SAMPLES')
 if samples:
     Path(samples).write_text('')
