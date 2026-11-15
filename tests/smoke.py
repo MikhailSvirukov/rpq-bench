@@ -41,6 +41,8 @@ with tempfile.TemporaryDirectory() as temporary:
             assert len(calls) == 9, calls  # 3 queries * (1 warmup + 2 measured)
             ended = [row for row in records if row['phase'] == 'query' and row['event'] == 'end' and row['metric'] == 'status']
             assert len(ended) == 9 and all(float(row['value']) == 0 for row in ended)
+            assert (output / 'jit-errors.log').is_file()
+            assert any(row['metric'] == 'jit_after' for row in records)
             summary = subprocess.run([sys.executable, str(root / 'LAGraph/experimental/benchmark/rpq_profile.py'), str(profile)],
                                      capture_output=True, text=True, check=True)
             observations = list(csv.DictReader(io.StringIO(summary.stdout), delimiter='\t'))

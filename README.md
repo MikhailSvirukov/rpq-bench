@@ -163,3 +163,9 @@ nonzero exit status; diagnostics go to errors.log. Without --output the profile
 is disabled. LG_RPQ_PROFILE and LG_RPQ_PROFILE_RUN_ID are no longer used.
 A new run overwrites profile-results.tsv. The header is flushed immediately;
 call identities and completed iteration buffers are also flushed during a run.
+
+With `--output DIR`, JIT compiler diagnostics are saved to `DIR/jit-errors.log`
+(the file is reset at the start of a run). Its path is recorded as `jit_error_log`
+in run.json. An empty file means no compiler stderr was recorded. The internal
+profile records `jit_after` after matrix operations to locate a transition out
+of JIT ON. This records diagnostics without changing the selected JIT mode.

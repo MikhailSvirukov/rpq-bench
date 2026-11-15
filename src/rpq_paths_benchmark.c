@@ -317,6 +317,26 @@ int main (int argc, char **argv)
             fprintf (stderr, "profile %s: %s\n", profile_path, strerror (errno)) ;
             info = GrB_INVALID_VALUE ; goto cleanup ;
         }
+        // Keep compiler diagnostics beside the algorithm profile. GraphBLAS
+        // otherwise discards compiler stderr when BURBLE is disabled.
+        const char *slash = strrchr (profile_path, '/') ;
+        size_t dir_len = slash == NULL ? 0 : (size_t) (slash - profile_path + 1) ;
+        const char *name = "jit-errors.log" ;
+        char *jit_log = malloc (dir_len + strlen (name) + 1) ;
+        if (jit_log == NULL) { info = GrB_OUT_OF_MEMORY ; goto cleanup ; }
+        memcpy (jit_log, profile_path, dir_len) ;
+        strcpy (jit_log + dir_len, name) ;
+        FILE *jit_file = fopen (jit_log, "w") ;
+        if (jit_file == NULL)
+        {
+            fprintf (stderr, "JIT log %s: %s\n", jit_log, strerror (errno)) ;
+            free (jit_log) ; info = GrB_INVALID_VALUE ; goto cleanup ;
+        }
+        if (fclose (jit_file) != 0)
+        { free (jit_log) ; info = GrB_INVALID_VALUE ; goto cleanup ; }
+        info = GxB_Global_Option_set_CHAR (GxB_JIT_ERROR_LOG, jit_log) ;
+        free (jit_log) ;
+        if (info != GrB_SUCCESS) goto cleanup ;
         info = LAGraph_2RpqPath_SetProfile (profile, NULL, 0, false, msg) ;
         if (info != GrB_SUCCESS) goto cleanup ;
     }

@@ -183,6 +183,7 @@ def main():
                     "verify": args.verify, "process": args.process,
                     "memory": args.memory,
                     "algorithm_profile": str((args.output / "profile-results.tsv").resolve()) if args.output is not None else None,
+                    "jit_error_log": str((args.output / "jit-errors.log").resolve()) if args.output is not None else None,
                     "warmup": args.warmup, "iterations": args.iterations,
                     "lagraph_commit": revision(root / "LAGraph"),
                     "graphblas_commit": revision(root / "GraphBLAS")}
