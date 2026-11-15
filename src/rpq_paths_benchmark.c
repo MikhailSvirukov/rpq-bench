@@ -272,6 +272,9 @@ cleanup:
 // (label graph_file)... query_prefixes...
 int main (int argc, char **argv)
 {
+    const char *profile_path = NULL ;
+    if (argc >= 3 && strcmp (argv[1], "--profile") == 0)
+    { profile_path = argv[2] ; argc -= 2 ; argv += 2 ; }
     if (argc < 8) return (EXIT_FAILURE) ;
     QueryFunction query = NULL ;
     if (!strcmp (argv[1], "all")) query = LAGraph_2RpqPath_AllPaths ;
@@ -294,7 +297,7 @@ int main (int argc, char **argv)
     char msg [LAGRAPH_MSG_LEN] = "" ;
     GraphLabel *graph = NULL ;
     bool failed = false ;
-    FILE *samples = NULL ;
+    FILE *samples = NULL, *profile = NULL ;
     const char *samples_path = getenv ("RPQ_BENCH_VERIFY_SAMPLES") ;
     process_progress = getenv ("RPQ_BENCH_PROCESS") != NULL ;
     bool trace_queries = process_progress || getenv ("LAGRAPH_RPQ_TRACE") != NULL ;
@@ -306,6 +309,17 @@ int main (int argc, char **argv)
         return (EXIT_FAILURE) ;
     }
     progress ("initialization complete") ;
+    if (profile_path != NULL)
+    {
+        profile = fopen (profile_path, "w") ;
+        if (profile == NULL)
+        {
+            fprintf (stderr, "profile %s: %s\n", profile_path, strerror (errno)) ;
+            info = GrB_INVALID_VALUE ; goto cleanup ;
+        }
+        info = LAGraph_2RpqPath_SetProfile (profile, NULL, 0, false, msg) ;
+        if (info != GrB_SUCCESS) goto cleanup ;
+    }
     if (samples_path != NULL)
     {
         samples = fopen (samples_path, "w") ;
@@ -353,6 +367,8 @@ int main (int argc, char **argv)
                         phase == 0 ? "warmup" : "measured", pass + 1) ;
                     fflush (stderr) ;
                 }
+                info = LAGraph_2RpqPath_SetProfile (profile, number, (size_t) pass + 1, phase == 0, msg) ;
+                if (info != GrB_SUCCESS) goto cleanup ;
                 int query_info = run_query (prefix, graph, (size_t) n, query,
                     &seconds, &count, msg) ;
                 if (query_info != GrB_SUCCESS)
@@ -386,6 +402,9 @@ int main (int argc, char **argv)
         }
     }
 cleanup:
+    LAGraph_2RpqPath_SetProfile (NULL, NULL, 0, false, NULL) ;
+    if (profile != NULL && fclose (profile) != 0)
+    { fprintf (stderr, "profile %s: %s\n", profile_path, strerror (errno)) ; failed = true ; }
     if (samples != NULL && fclose (samples) != 0)
     {
         fprintf (stderr, "%s: %s\n", samples_path, strerror (errno)) ;

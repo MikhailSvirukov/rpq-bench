@@ -134,22 +134,32 @@ from the configured fork (`svmk17/rpq-indexed-saxpy-fix`). The patch fixes gener
 indexed SAXPY operand-flip workspaces. Unpatched stable 10.5.2 crashed in the
 shared-prefix smoke case and with the automaton of Wikidata query 3.
 
-LAGraph is pinned to `13567a70bdf954e34caaa13ae6fabc0b574cb109` (AUTO and
+LAGraph is pinned to `23c88a1ab13798fe2fc7bd40584fb9c08904bf77` (AUTO and
 baseline profiling). The historical branch name still ends in `-stable`, but
 GraphBLAS now uses the patched commit. Regular submodule updates use the exact
 pinned commits; `branch` only controls explicit `submodule update --remote`.
 
-To record algorithm internals, set the environment variable before running the
-benchmark. It is inherited by the C driver:
+With `--output`, internal metrics are written automatically to `profile-results.tsv`
+in the result directory. No environment variable is required:
 
 ```bash
-mkdir -p results/profile
-LG_RPQ_PROFILE="$PWD/results/profile/run" \
-  python3 scripts/rpq_paths_bench.py /path/to/queries /path/to/matrices \
-    --semantics trails --warmup 0 --iterations 1 --output results/trails
-python3 LAGraph/experimental/benchmark/rpq_profile.py 'results/profile/*.tsv' > results/profile-summary.tsv
+python3 scripts/rpq_paths_bench.py /path/to/queries /path/to/matrices \
+  --semantics trails --warmup 0 --iterations 1 --output results/trails
+python3 LAGraph/experimental/benchmark/rpq_profile.py results/trails/profile-results.tsv > results/trails/profile-summary.tsv
 ```
 
-Use a new prefix/directory for each run. Profiles include warmups when enabled.
+All calls, including warmups, share the file and carry query/pass/warmup and pid/call identifiers.
+A new benchmark run truncates this file along with the other result files.
 See [profiling details](LAGraph/experimental/benchmark/rpq_profile.md).
 Profiling adds synchronization and scanning overhead inside the timed call.
+
+
+### Shared algorithm profile file
+
+`--output DIR` explicitly passes `DIR/profile-results.tsv` to the C driver
+through `--profile PATH`. The driver opens it once in write mode and passes the
+stream and query context to LAGraph in code. Opening or writing failures cause a
+nonzero exit status; diagnostics go to errors.log. Without --output the profile
+is disabled. LG_RPQ_PROFILE and LG_RPQ_PROFILE_RUN_ID are no longer used.
+A new run overwrites profile-results.tsv. The header is flushed immediately;
+call identities and completed iteration buffers are also flushed during a run.
