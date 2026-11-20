@@ -1,7 +1,8 @@
 [submodule "LAGraph"]
 	path = LAGraph
 	url = https://github.com/MikhailSvirukov/LAGraph.git
+	branch = svmk17/rpq-paths-auto-optimized-jit-types-profiling
 [submodule "GraphBLAS"]
 	path = GraphBLAS
-	url = git@github.com:MikhailSvirukov/GraphBLAS.git
-	branch = svmk17/rpq-jit-select-types
+	url = https://github.com/DrTimothyAldenDavis/GraphBLAS.git
+	branch = v10.5.x.branch

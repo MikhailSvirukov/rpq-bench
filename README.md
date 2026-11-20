@@ -148,3 +148,8 @@ See [profiling details](LAGraph/experimental/benchmark/rpq_profile.md).
 Profiling adds synchronization and scanning overhead inside the timed call.
 Use `--jit-cache DIR` to select the GraphBLAS JIT cache location. The C driver
 accepts `--profile FILE` and `--jit-cache DIR` before the semantics argument.
+
+Pinned LAGraph commit: `50c7752058d9152151ae2aa7d523dc2214d8f324`.
+GraphBLAS uses the main repository
+[DrTimothyAldenDavis/GraphBLAS, v10.5.x.branch](https://github.com/DrTimothyAldenDavis/GraphBLAS/tree/v10.5.x.branch),
+commit `17990085aee002c4e318462eafc71a2cad03ce70`, including the indexed SAXPY and select JIT fixes.
