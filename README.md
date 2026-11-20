@@ -129,7 +129,7 @@ and progress output add overhead. The monitor's own memory is excluded.
 
 ## Optimized algorithm and JIT diagnostics
 
-LAGraph is pinned to `481566f0623a82c197ac8bf38254d194cbc2967d`:
+LAGraph is pinned to `88365f8bb06b321c22a1b9d6fa2b148a8cc106fd`:
 AUTO multiplication, compact temporary blocks and masked P/frontier updates,
 without algorithm profiling. GraphBLAS uses upstream commit
 `17990085aee002c4e318462eafc71a2cad03ce70` from
