@@ -127,35 +127,24 @@ and allocations retained from earlier queries; they do not isolate allocations
 made by one query. Virtual address space is not physical RAM usage. Monitoring
 and progress output add overhead. The monitor's own memory is excluded.
 
-## Optimized algorithm and JIT diagnostics
+## Algorithm profiling and JIT diagnostics
 
-LAGraph is pinned to `05894be7`:
-AUTO multiplication, compact temporary blocks and masked P/frontier updates,
-without algorithm profiling. GraphBLAS remains pinned to patched fork commit
-`3e0b8cd3e1`.
+This branch uses LAGraph `svmk17/rpq-paths-auto-optimized-jit-types-profiling`:
+AUTO multiplication, compact temporary blocks, masked P/frontier updates,
+and C definitions for user types, with internal profiling enabled.
 
-With `--output DIR`, JIT compiler diagnostics are saved to `DIR/jit-errors.log`.
-The file is reset at the start of each run; run.json records its path as
-`jit_error_log`. Algorithm profile-results.tsv is not generated. External process
-memory sampling with --memory remains available.
+With `--output DIR`, the driver creates `DIR/profile-results.tsv` and
+`DIR/jit-errors.log`. Warmups and measured calls share the profile stream;
+query/pass/warmup identifiers distinguish them. Each run overwrites these files.
 
-Use `--jit-cache DIR` to place the GraphBLAS JIT cache on another filesystem:
-
-```sh
-python3 scripts/rpq_paths_bench.py QUERIES MATRICES --semantics shortest \
-    --jit-cache /mnt/big-disk/graphblas-jit/GrB10.5.0 --output results/wiki-shortest
+```bash
+python3 scripts/rpq_paths_bench.py /path/to/queries /path/to/matrices \
+  --semantics trails --warmup 1 --iterations 1 --output results/trails
+python3 LAGraph/experimental/benchmark/rpq_profile.py \
+  results/trails/profile-results.tsv > results/trails/profile-summary.tsv
 ```
 
-Python creates the directory and passes its absolute path to the C driver,
-which sets GxB_JIT_CACHE_PATH after initialization, before loading inputs.
-The flag also works without --output. With --output, run.json records jit_cache.
-Without the flag, the GraphBLAS default is retained. Existing cache files are
-not migrated and the JIT control mode is unchanged. The C driver accepts
---jit-cache DIR before the semantics argument, in either order with --jit-error-log FILE.
-
-This branch includes RPQ C type definitions (without algorithm profiling) and
-the GraphBLAS select JIT fix. The fix distinguishes matrix UDTs in the cache
-and selects generic execution when the matrix type has no JIT definition.
-User-defined semiring operators still use generic kernels. See
-[LAGraph JIT notes](LAGraph/experimental/algorithm/LAGraph_2RpqPath_jit.md).
-Use --jit-cache DIR to select a cache on a filesystem with enough free space.
+See [profiling details](LAGraph/experimental/benchmark/rpq_profile.md).
+Profiling adds synchronization and scanning overhead inside the timed call.
+Use `--jit-cache DIR` to select the GraphBLAS JIT cache location. The C driver
+accepts `--profile FILE` and `--jit-cache DIR` before the semantics argument.

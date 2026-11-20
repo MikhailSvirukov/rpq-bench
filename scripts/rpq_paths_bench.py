@@ -179,7 +179,7 @@ def main():
         results = stderr = None
         if args.output is not None:
             args.output.mkdir(parents=True, exist_ok=True)
-            command[1:1] = ["--jit-error-log", str((args.output / "jit-errors.log").resolve())]
+            command[1:1] = ["--profile", str((args.output / "profile-results.tsv").resolve())]
             results = stack.enter_context((args.output / "results.tsv").open("w"))
             stderr = stack.enter_context((args.output / "errors.log").open("w"))
         root = Path(__file__).resolve().parents[1]
@@ -191,6 +191,7 @@ def main():
         metadata = {"command": command, "semantics": args.semantics,
                     "verify": args.verify, "process": args.process,
                     "memory": args.memory,
+                    "algorithm_profile": str((args.output / "profile-results.tsv").resolve()) if args.output is not None else None,
                     "jit_error_log": str((args.output / "jit-errors.log").resolve()) if args.output is not None else None,
                     "jit_cache": str(jit_cache) if jit_cache is not None else None,
                     "warmup": args.warmup, "iterations": args.iterations,
