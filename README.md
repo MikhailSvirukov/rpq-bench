@@ -129,7 +129,7 @@ and progress output add overhead. The monitor's own memory is excluded.
 
 ## Algorithm profiling and JIT diagnostics
 
-This branch uses LAGraph `svmk17/rpq-paths-auto-optimized-jit-types-profiling`:
+This branch uses LAGraph `svmk17/rpq-latest-profile`:
 AUTO multiplication, compact temporary blocks, masked P/frontier updates,
 and C definitions for user types, with internal profiling enabled.
 
@@ -149,7 +149,7 @@ Profiling adds synchronization and scanning overhead inside the timed call.
 Use `--jit-cache DIR` to select the GraphBLAS JIT cache location. The C driver
 accepts `--profile FILE` and `--jit-cache DIR` before the semantics argument.
 
-Pinned LAGraph commit: `50c7752058d9152151ae2aa7d523dc2214d8f324`.
+Pinned LAGraph commit: `7a99dfe62e9c4363c01a98e916efb89ea3bea1ed`.
 GraphBLAS uses the main repository
 [DrTimothyAldenDavis/GraphBLAS, v10.5.x.branch](https://github.com/DrTimothyAldenDavis/GraphBLAS/tree/v10.5.x.branch),
 commit `17990085aee002c4e318462eafc71a2cad03ce70`, including the indexed SAXPY and select JIT fixes.
