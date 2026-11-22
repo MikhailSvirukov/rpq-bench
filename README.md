@@ -23,12 +23,12 @@ python3 scripts/rpq_paths_bench.py /path/to/queries/1 /path/to/matrices \
   --semantics trails --warmup 1 --iterations 5 --output results/query-1
 ```
 
-Queries whose source and destination in `meta.txt` are both zero (`any-any`)
-are silently skipped in Python before verification or driver startup. No log
-entries or report records are created for them. If all queries are skipped,
-the command succeeds without launching the driver or creating output files.
-This filter retains queries with at least one fixed endpoint; the existing
-`--verify` check still rejects two fixed endpoints as unsupported by the API.
+Queries with source and destination both zero in `meta.txt` (`any-any`)
+run once with all graph vertices as sources and all accepted endpoints.
+The matrix traversal is shared across sources. `shortest` minimizes separately
+for every source/destination pair, retaining all ties. Accepted zero-edge paths
+are included. The answer count limit applies to the whole invocation.
+The `--verify` check still rejects two fixed endpoints as unsupported by the API.
 
 The second argument accepts a graph matrix directory, individual numeric
 matrix files, or `label=/path/to/matrix` mappings. A matrix directory is scanned

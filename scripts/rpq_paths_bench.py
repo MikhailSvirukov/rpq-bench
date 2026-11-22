@@ -13,7 +13,6 @@ import signal
 import tempfile
 from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
-from itertools import islice
 
 from inputs import validate_queries, validate_samples
 
@@ -21,16 +20,6 @@ from inputs import validate_queries, validate_samples
 class BenchmarkInterrupted(Exception):
     def __init__(self, signum):
         self.signum = signum
-
-
-def is_unbound_query(directory):
-    """Skip only a confirmed any-any query; leave invalid inputs to validation/the driver."""
-    try:
-        with (directory / "meta.txt").open() as stream:
-            endpoints = list(islice((token for line in stream for token in line.split()), 2))
-        return len(endpoints) == 2 and all(int(value) == 0 for value in endpoints)
-    except (OSError, ValueError):
-        return False
 
 
 def forward_lines(source, *destinations):
@@ -198,9 +187,6 @@ def main():
                          key=lambda p: int(p.name))
     if not queries:
         parser.error("expected meta.txt or numbered query folders containing meta.txt")
-    queries = [directory for directory in queries if not is_unbound_query(directory)]
-    if not queries:
-        return 0
     if not driver.is_file():
         parser.error(f"missing {driver}; build the rpq_paths_benchmark CMake target first")
     inputs = []

@@ -30,12 +30,25 @@ with tempfile.TemporaryDirectory() as temporary:
             subprocess.run(command, check=True)
             lines = (output / 'results.tsv').read_text().splitlines()
             assert lines[0] == 'query\ttime_seconds\tpaths', lines
-            assert [line.split('\t')[::2] for line in lines[1:]] == [['1', '1'], ['2', '1'], ['4', '1']] * 2, lines
+            assert [line.split('\t')[::2] for line in lines[1:]] == [['1', '1'], ['2', '1'], ['3', '2'], ['4', '1']] * 2, lines
             metadata = json.loads((output / 'run.json').read_text())
             assert metadata['exit_code'] == 0 and metadata['verify'] == verify
             assert not (output / 'profile-results.tsv').exists()
             assert (output / 'jit-errors.log').is_file()
             assert (output / 'samples.tsv').exists() == verify
+    # a+ over 1->2->3: pair (1,3) needs length 2 even though 2 is a root.
+    any_query = base / 'any-any'
+    any_query.mkdir()
+    (any_query / 'meta.txt').write_text('0 0\n1 1\n1 2\n1 7\n')
+    (any_query / '7.txt').write_text('%%MatrixMarket matrix coordinate pattern general\n2 2 2\n1 2\n2 2\n')
+    for semantics in ('all', 'simple', 'trails', 'shortest'):
+        for length, count, expected in ((2, 10, 3), (1, 10, 2), (2, 1, 1), (0, 10, 0)):
+            result = subprocess.run([sys.executable, str(root / 'scripts/rpq_paths_bench.py'),
+                str(any_query), str(matrices), '--semantics', semantics, '--verify',
+                '--max-path-length', str(length), '--max-path-count', str(count)],
+                capture_output=True, text=True)
+            assert result.returncode == 0, result.stderr
+            assert int(result.stdout.splitlines()[1].split('\t')[2]) == expected, result.stdout
     bad_jit_log = base / 'missing-directory' / 'jit-errors.log'
     bad = subprocess.run([str(root / 'build/rpq_paths_benchmark'), '--jit-error-log', str(bad_jit_log),
                           'all', '0', '1', '1', '7', str(matrices / '7.txt'), str(queries / '1')],
@@ -209,4 +222,4 @@ with tempfile.TemporaryDirectory() as temporary:
     subprocess.run([sys.executable, str(root / 'scripts/download_data.py'),
                     '--queries-url', Path(qzip).as_uri(), '--matrices-url', Path(mzip).as_uri(),
                     '--output', str(base / 'downloaded'), '--verify'], check=True)
-print('Smoke tests passed: single/batch queries, four semantics with/without --verify, prepared SD/backward queries, any-any filtering, repeated passes, download.')
+print('Smoke tests passed: single/batch queries, four semantics with/without --verify, prepared SD/backward queries, any-any queries, repeated passes, download.')
