@@ -161,3 +161,12 @@ and selects generic execution when the matrix type has no JIT definition.
 User-defined semiring operators still use generic kernels. See
 [LAGraph JIT notes](LAGraph/experimental/algorithm/LAGraph_2RpqPath_jit.md).
 Use --jit-cache DIR to select a cache on a filesystem with enough free space.
+
+### Per-query reconstruction limits
+
+Use `--max-path-count 100000` and `--max-path-length 60000` to set the
+maximum distinct answers per invocation and the inclusive path length in edges.
+The count is shared by all sources and destinations. Length zero is allowed;
+the count must be positive. These bounds affect reconstruction, not matrix
+traversal. For shortest paths, the count bound precedes final filtering.
+Both options are also accepted by the C driver before its positional arguments.

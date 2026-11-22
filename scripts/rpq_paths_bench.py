@@ -90,6 +90,10 @@ def main():
                         help="benchmark CMake build directory (default: build)")
     parser.add_argument("--output", type=Path,
                         help="also save stdout results to results.tsv, plus errors.log and run.json")
+    parser.add_argument("--max-path-count", type=int, default=100000,
+                        help="maximum distinct answers per invocation (default: 100000)")
+    parser.add_argument("--max-path-length", type=int, default=60000,
+                        help="maximum path length in edges, inclusive (default: 60000)")
     parser.add_argument("--jit-cache", type=Path, help="GraphBLAS JIT cache directory (created if necessary)")
     parser.add_argument("--verify", action="store_true",
                         help="verify input files and repeated path counts in Python")
@@ -162,11 +166,15 @@ def main():
             parser.error(str(exc))
     if args.verify and args.process:
         print("[process] input verification complete", file=sys.stderr, flush=True)
+    if args.max_path_count < 1 or args.max_path_length < 0:
+        parser.error("--max-path-count must be positive; --max-path-length must be nonnegative")
     command = [str(driver.resolve()), args.semantics, str(args.warmup),
                str(args.iterations), str(len(matrices))]
     for label, path in matrices.items():
         command.extend([label, str(path.resolve())])
     command.extend(str(directory.resolve()) for directory in queries)
+    command[1:1] = ["--max-path-count", str(args.max_path_count),
+                    "--max-path-length", str(args.max_path_length)]
     jit_cache = None
     if args.jit_cache is not None:
         jit_cache = args.jit_cache.expanduser().resolve()
@@ -193,6 +201,7 @@ def main():
                     "memory": args.memory,
                     "jit_error_log": str((args.output / "jit-errors.log").resolve()) if args.output is not None else None,
                     "jit_cache": str(jit_cache) if jit_cache is not None else None,
+                    "max_path_count": args.max_path_count, "max_path_length": args.max_path_length,
                     "warmup": args.warmup, "iterations": args.iterations,
                     "lagraph_commit": revision(root / "LAGraph"),
                     "graphblas_commit": revision(root / "GraphBLAS")}

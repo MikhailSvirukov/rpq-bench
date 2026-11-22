@@ -28,7 +28,7 @@ typedef int (*QueryFunction)
 (
     LAGraph_RpqPath **, size_t *, LAGraph_Graph *, size_t,
     const GrB_Index *, size_t, const GrB_Index *, size_t, LAGraph_Graph *,
-    const GrB_Index *, size_t, char *
+    const GrB_Index *, size_t, const LAGraph_RpqPathLimits *, char *
 ) ;
 
 /** Read a Matrix Market matrix directly and materialize it by row.
@@ -146,7 +146,7 @@ cleanup:
 static int run_query
 (
     const char *prefix, GraphLabel *graph,
-    size_t graph_count, QueryFunction query,
+    size_t graph_count, QueryFunction query, const LAGraph_RpqPathLimits *limits,
     double *seconds, size_t *count, char *msg
 )
 {
@@ -243,7 +243,7 @@ static int run_query
     info = query (&paths, &path_count, R, nl,
         single_destination ? QF : QS, single_destination ? nqf : nqs,
         single_destination ? QS : QF, single_destination ? nqs : nqf,
-        G, S, ns, msg) ;
+        G, S, ns, limits, msg) ;
     *seconds = LAGraph_WallClockTime ( ) - begin ;
     progress ("query %s: algorithm returned (info=%d)", prefix, info) ;
     if (info != GrB_SUCCESS) goto cleanup ;
@@ -272,13 +272,30 @@ cleanup:
 // (label graph_file)... query_prefixes...
 int main (int argc, char **argv)
 {
+    LAGraph_RpqPathLimits limits = {60000, 100000} ;
     const char *jit_log_path = NULL, *jit_cache = NULL ;
     while (argc > 1 && (strcmp (argv[1], "--jit-error-log") == 0 ||
-                       strcmp (argv[1], "--jit-cache") == 0))
+                       strcmp (argv[1], "--jit-cache") == 0 ||
+                       strcmp (argv[1], "--max-path-count") == 0 ||
+                       strcmp (argv[1], "--max-path-length") == 0))
     {
         if (argc < 3 || argv[2][0] == '\0') return (EXIT_FAILURE) ;
         if (strcmp (argv[1], "--jit-error-log") == 0) jit_log_path = argv[2] ;
-        else jit_cache = argv[2] ;
+        else if (strcmp (argv[1], "--jit-cache") == 0) jit_cache = argv[2] ;
+        else
+        {
+            char *limit_end = NULL ;
+            errno = 0 ;
+            uintmax_t value = strtoumax (argv[2], &limit_end, 10) ;
+            if (errno || argv[2][0] == '-' || limit_end == argv[2] ||
+                *limit_end != '\0' || value > SIZE_MAX) return (EXIT_FAILURE) ;
+            if (strcmp (argv[1], "--max-path-count") == 0)
+            {
+                if (value == 0) return (EXIT_FAILURE) ;
+                limits.max_count = (size_t) value ;
+            }
+            else limits.max_length = (size_t) value ;
+        }
         argc -= 2 ; argv += 2 ;
     }
     if (argc < 8) return (EXIT_FAILURE) ;
@@ -384,7 +401,7 @@ int main (int argc, char **argv)
                         phase == 0 ? "warmup" : "measured", pass + 1) ;
                     fflush (stderr) ;
                 }
-                int query_info = run_query (prefix, graph, (size_t) n, query,
+                int query_info = run_query (prefix, graph, (size_t) n, query, &limits,
                     &seconds, &count, msg) ;
                 if (query_info != GrB_SUCCESS)
                 {
