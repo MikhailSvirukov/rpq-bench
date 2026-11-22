@@ -2,6 +2,7 @@
 """Run predecessor-based RPQ benchmarks on prepared Matrix Market inputs."""
 
 import argparse
+import csv
 from pathlib import Path
 import subprocess
 import sys
@@ -35,14 +36,12 @@ def is_unbound_query(directory):
 def forward_lines(source, *destinations):
     for line in source:
         for destination in destinations:
-            destination.write(line)
-            destination.flush()
+            if destination is not None:
+                destination.write(line)
+                destination.flush()
 
 
-def run_driver(command, results, stderr, environment, progress=False, monitor=False):
-    if results is None:
-        return subprocess.run(command, stderr=stderr, env=environment,
-                              check=False).returncode
+def run_driver(command, results, stderr, environment, progress=False, monitor=False, skip_header=False):
     # Drain stderr independently: loading can produce progress before any stdout.
     with subprocess.Popen(command, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE if progress else stderr,
@@ -51,7 +50,13 @@ def run_driver(command, results, stderr, environment, progress=False, monitor=Fa
             errors = (executor.submit(forward_lines, process.stderr, stderr, sys.stderr)
                       if progress else None)
             try:
-                forward_lines(process.stdout, results, sys.stdout)
+                for line in process.stdout:
+                    if skip_header and line == "query\ttime_seconds\tpaths\n":
+                        continue
+                    for stream in (results, sys.stdout):
+                        if stream is not None:
+                            stream.write(line)
+                            stream.flush()
                 status = process.wait()
                 if errors is not None:
                     errors.result()
@@ -71,6 +76,76 @@ def run_driver(command, results, stderr, environment, progress=False, monitor=Fa
                     process.kill()
                     process.wait()
                 raise
+
+
+def read_invocations(path):
+    """A killed process may leave a partial final record; ignore only that tail."""
+    records = []
+    if path.exists():
+        for line in path.read_text().splitlines(keepends=True):
+            if not line.endswith("\n"):
+                break
+            event, index, info = line.rstrip("\n").split("\t")
+            records.append((event, int(index), int(info)))
+    return records
+
+
+def run_recovering(command, queries, args, results, stderr, environment, metadata, stack):
+    total = len(queries) * (args.warmup + args.iterations)
+    resume = overall_status = 0
+    attempts = metadata["attempts"] = []
+    failures = None
+    if args.output is not None:
+        failure_stream = stack.enter_context((args.output / "failures.tsv").open("w"))
+        failures = csv.writer(failure_stream, delimiter="\t", lineterminator="\n")
+        failures.writerow(("invocation", "query", "phase", "pass", "status", "exit_code", "info"))
+    temporary = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="rpq-resume-")))
+
+    def failure(index, reason, status, info=""):
+        phase = "warmup" if index < args.warmup * len(queries) else "measured"
+        offset = 0 if phase == "warmup" else args.warmup * len(queries)
+        row = (index, queries[index % len(queries)].name, phase,
+               (index - offset) // len(queries) + 1, reason, status, info)
+        if failures is not None:
+            failures.writerow(row)
+            failure_stream.flush()
+        print("benchmark: query {}: {} pass {}: {} (exit={}, info={})".format(
+            row[1], phase, row[3], reason, status, info),
+            file=stderr if stderr is not None else sys.stderr, flush=True)
+
+    while resume < total:
+        journal = temporary / f"attempt-{len(attempts)}.tsv"
+        launch = [command[0], "--resume-at", str(resume), "--invocation-log", str(journal), *command[1:]]
+        if args.memory:
+            launch = [sys.executable, str(Path(__file__).with_name("memory_monitor.py")),
+                      "--output", str(args.output.resolve()),
+                      "--interval-ms", str(args.memory_interval_ms),
+                      "--expected-invocations", str(total - resume),
+                      *(["--append"] if attempts else []), "--", *launch]
+        status = run_driver(launch, results, stderr, environment, args.process,
+                            monitor=args.memory, skip_header=bool(attempts))
+        status = status if status >= 0 else 128 - status
+        records = read_invocations(journal)
+        attempts.append({"resume_at": resume, "exit_code": status,
+                         "last_invocation": records[-1][1] if records else None})
+        for event, index, info in records:
+            if event == "end" and info != 0:
+                failure(index, "algorithm_error", status, info)
+        if status:
+            overall_status = overall_status or status
+        # Ordinary API/input errors are handled by the C loop. SIGINT/SIGTERM
+        # are user cancellation, and an exit before any journal entry cannot
+        # be attributed to a query (e.g. graph loading); never restart those.
+        if status < 128 or status in (130, 143) or not records:
+            break
+        event, index, _ = records[-1]
+        if event == "begin":
+            failure(index, "sigkill" if status == 137 else "process_signal", status)
+        resume = index + 1
+        if resume < total:
+            print(f"benchmark: restarting driver at invocation {resume}; graph will be reloaded",
+                  file=stderr if stderr is not None else sys.stderr, flush=True)
+    return overall_status
 
 
 def main():
@@ -225,28 +300,20 @@ def main():
             samples = ((args.output / "samples.tsv") if args.output is not None else
                        Path(stack.enter_context(tempfile.TemporaryDirectory())) / "samples.tsv")
             environment["RPQ_BENCH_VERIFY_SAMPLES"] = str(samples.resolve())
-        launch_command = command
-        if args.memory:
-            launch_command = [sys.executable, str(Path(__file__).with_name("memory_monitor.py")),
-                              "--output", str(args.output.resolve()),
-                              "--interval-ms", str(args.memory_interval_ms),
-                              "--expected-invocations", str(len(queries) * (args.warmup + args.iterations)),
-                              "--", *command]
         previous_handlers = {}
-        if args.memory:
-            def interrupted(signum, frame):
-                raise BenchmarkInterrupted(signum)
-            for signum in (signal.SIGINT, signal.SIGTERM):
-                previous_handlers[signum] = signal.signal(signum, interrupted)
+        def interrupted(signum, frame):
+            raise BenchmarkInterrupted(signum)
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.signal(signum, interrupted)
         try:
-            status = run_driver(launch_command, results, stderr, environment, args.process,
-                                monitor=args.memory)
+            status = run_recovering(command, queries, args, results, stderr,
+                                    environment, metadata, stack)
         except BenchmarkInterrupted as exc:
             status = 128 + exc.signum
         finally:
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
-        if args.verify and status == 0:
+        if args.verify and samples.is_file():
             try:
                 validate_samples(samples)
             except (ValueError, OSError) as exc:

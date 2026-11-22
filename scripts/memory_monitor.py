@@ -29,10 +29,11 @@ SUMMARY_FIELDS = ("query", "phase", "pass", "status", "info", "start_ns", "end_n
 
 
 class Report:
-    def __init__(self, stream, fields):
+    def __init__(self, stream, fields, header=True):
         self.stream = stream
         self.writer = csv.writer(stream, delimiter="\t", lineterminator="\n")
-        self.write(fields)
+        if header:
+            self.write(fields)
 
     def write(self, values):
         self.writer.writerow(values)
@@ -138,10 +139,12 @@ def stop_driver(process):
             process.wait()
 
 
-def monitor(command, output, interval_ms, expected_invocations):
+def monitor(command, output, interval_ms, expected_invocations, append=False):
     with ExitStack() as stack:
         def report(name, fields):
-            return Report(stack.enter_context((output / name).open("w", newline="")), fields)
+            path = output / name
+            header = not (append and path.exists() and path.stat().st_size)
+            return Report(stack.enter_context(path.open("a" if append else "w", newline="")), fields, header)
         summary = report("memory.tsv", SUMMARY_FIELDS)
         samples = report("memory_samples.tsv", ("timestamp_ns", "rss_bytes", "vms_bytes"))
         events = report("memory_events.tsv", ("timestamp_ns", "event", "query", "phase", "pass", "info"))
@@ -206,6 +209,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--interval-ms", type=float, required=True)
     parser.add_argument("--expected-invocations", type=int, required=True)
+    parser.add_argument("--append", action="store_true", help="append reports after a driver restart")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -214,7 +218,7 @@ def main():
     signal.signal(signal.SIGINT, interrupt)
     signal.signal(signal.SIGTERM, interrupt)
     try:
-        return monitor(command, args.output, args.interval_ms, args.expected_invocations)
+        return monitor(command, args.output, args.interval_ms, args.expected_invocations, args.append)
     except Interrupted as exc:
         return 128 + exc.signum
     except (OSError, ValueError) as exc:

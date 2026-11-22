@@ -170,3 +170,33 @@ The count is shared by all sources and destinations. Length zero is allowed;
 the count must be positive. These bounds affect reconstruction, not matrix
 traversal. For shortest paths, the count bound precedes final filtering.
 Both options are also accepted by the C driver before its positional arguments.
+
+### Continuing after a driver crash
+
+Python automatically starts a new driver after a fatal signal during a query
+(including SIGKILL and SIGSEGV), then continues with the next invocation.
+Normal batches still load the graph once. After a crash the graph and prepared
+transposes are loaded again; completed warmup or measured calls are not repeated.
+A failed invocation is skipped, while later scheduled repetitions of the same
+query are still attempted. Existing results, verification samples, JIT logs and
+memory reports are retained. The results table has only one header.
+
+With `--output`, `failures.tsv` records the zero-based invocation number, query,
+phase, one-based pass, failure status, process exit code and API error code
+(when available). `run.json` includes an `attempts` list with resume positions
+and exit codes. The overall exit code stays nonzero if any attempt failed,
+even when subsequent queries complete. SIGKILL is reported as `sigkill`,
+not confirmed OOM: the signal alone cannot establish its cause.
+
+The C driver journals each invocation before reading the query and after
+flushing its result, outside algorithm timing. Python uses the journal rather
+than buffered progress output to resume. An already emitted row is retained
+even if the driver dies just before its completion record. On restart, a new
+process has cold in-memory caches; the original remaining warmup/measurement
+schedule is preserved rather than adding extra warmups.
+
+SIGINT/SIGTERM cancel the run. A crash during initialization or graph loading
+is not retried. Recovery requires the Python launcher to survive; it cannot
+recover when the whole job is killed. API errors such as `GrB_OUT_OF_MEMORY`
+continue through the existing C loop and are also recorded in `failures.tsv`.
+Rebuild the C driver after updating: recovery requires its new journal support.

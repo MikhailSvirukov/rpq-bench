@@ -268,20 +268,33 @@ cleanup:
     return (info) ;
 }
 
+// Journal writes happen outside algorithm timing. Flush each record so a
+// surviving Python parent can resume even after SIGKILL of this process.
+static bool invocation_record (FILE *file, const char *event, size_t index, int info)
+{
+    return (file == NULL || (fprintf (file, "%s\t%zu\t%d\n", event, index, info) >= 0 &&
+        fflush (file) == 0)) ;
+}
+
 // Python supplies: semantics warmup iterations graph_count
 // (label graph_file)... query_prefixes...
 int main (int argc, char **argv)
 {
+    size_t resume_at = 0 ;
+    const char *invocation_log = NULL ;
     LAGraph_RpqPathLimits limits = {60000, 100000} ;
     const char *jit_log_path = NULL, *jit_cache = NULL ;
     while (argc > 1 && (strcmp (argv[1], "--jit-error-log") == 0 ||
                        strcmp (argv[1], "--jit-cache") == 0 ||
                        strcmp (argv[1], "--max-path-count") == 0 ||
-                       strcmp (argv[1], "--max-path-length") == 0))
+                       strcmp (argv[1], "--max-path-length") == 0 ||
+                       strcmp (argv[1], "--resume-at") == 0 ||
+                       strcmp (argv[1], "--invocation-log") == 0))
     {
         if (argc < 3 || argv[2][0] == '\0') return (EXIT_FAILURE) ;
         if (strcmp (argv[1], "--jit-error-log") == 0) jit_log_path = argv[2] ;
         else if (strcmp (argv[1], "--jit-cache") == 0) jit_cache = argv[2] ;
+        else if (strcmp (argv[1], "--invocation-log") == 0) invocation_log = argv[2] ;
         else
         {
             char *limit_end = NULL ;
@@ -294,6 +307,7 @@ int main (int argc, char **argv)
                 if (value == 0) return (EXIT_FAILURE) ;
                 limits.max_count = (size_t) value ;
             }
+            else if (strcmp (argv[1], "--resume-at") == 0) resume_at = (size_t) value ;
             else limits.max_length = (size_t) value ;
         }
         argc -= 2 ; argv += 2 ;
@@ -317,10 +331,12 @@ int main (int argc, char **argv)
         return (EXIT_FAILURE) ;
     size_t first_query = 5 + 2 * n ;
     size_t query_count = argc - first_query ;
+    if ((uintmax_t) warmup + (uintmax_t) iterations > SIZE_MAX / query_count)
+        return (EXIT_FAILURE) ;
     char msg [LAGRAPH_MSG_LEN] = "" ;
     GraphLabel *graph = NULL ;
     bool failed = false ;
-    FILE *samples = NULL ;
+    FILE *samples = NULL, *invocations = NULL ;
     const char *samples_path = getenv ("RPQ_BENCH_VERIFY_SAMPLES") ;
     process_progress = getenv ("RPQ_BENCH_PROCESS") != NULL ;
     bool trace_queries = process_progress || getenv ("LAGRAPH_RPQ_TRACE") != NULL ;
@@ -332,6 +348,15 @@ int main (int argc, char **argv)
         return (EXIT_FAILURE) ;
     }
     progress ("initialization complete") ;
+    if (invocation_log != NULL)
+    {
+        invocations = fopen (invocation_log, "a") ;
+        if (invocations == NULL)
+        {
+            fprintf (stderr, "%s: %s\n", invocation_log, strerror (errno)) ;
+            info = GrB_INVALID_VALUE ; goto cleanup ;
+        }
+    }
     if (jit_cache != NULL)
     {
         info = GxB_Global_Option_set_CHAR (GxB_JIT_CACHE_PATH, jit_cache) ;
@@ -344,7 +369,7 @@ int main (int argc, char **argv)
     }
     if (jit_log_path != NULL)
     {
-        FILE *jit_file = fopen (jit_log_path, "w") ;
+        FILE *jit_file = fopen (jit_log_path, resume_at == 0 ? "w" : "a") ;
         if (jit_file == NULL)
         {
             fprintf (stderr, "JIT log %s: %s\n", jit_log_path, strerror (errno)) ;
@@ -356,7 +381,7 @@ int main (int argc, char **argv)
     }
     if (samples_path != NULL)
     {
-        samples = fopen (samples_path, "w") ;
+        samples = fopen (samples_path, resume_at == 0 ? "w" : "a") ;
         if (samples == NULL)
         {
             fprintf (stderr, "%s: %s\n", samples_path, strerror (errno)) ;
@@ -389,6 +414,11 @@ int main (int argc, char **argv)
         {
             for (size_t q = 0 ; q < query_count ; q++)
             {
+                size_t invocation = ((phase == 0 ? 0 : (size_t) warmup) +
+                    (size_t) pass) * query_count + q ;
+                if (invocation < resume_at) continue ;
+                if (!invocation_record (invocations, "begin", invocation, 0))
+                { failed = true ; goto cleanup ; }
                 const char *prefix = argv[first_query + q] ;
                 const char *number = strrchr (prefix, '/') ;
                 number = number == NULL ? prefix : number + 1 ;
@@ -409,9 +439,16 @@ int main (int argc, char **argv)
                         number, phase == 0 ? "warmup" : "measured",
                         pass + 1, query_info, msg) ;
                     failed = true ;
+                    if (!invocation_record (invocations, "end", invocation, query_info))
+                        goto cleanup ;
                     continue ;
                 }
-                if (phase == 0) continue ;
+                if (phase == 0)
+                {
+                    if (!invocation_record (invocations, "end", invocation, 0))
+                    { failed = true ; goto cleanup ; }
+                    continue ;
+                }
                 // Export observations only; Python performs optional verification.
                 // Publish each measured invocation before starting the next query.
                 // Output and flushing are outside the timed public API call.
@@ -430,10 +467,14 @@ int main (int argc, char **argv)
                     failed = true ;
                     goto cleanup ;
                 }
+                if (!invocation_record (invocations, "end", invocation, 0))
+                { failed = true ; goto cleanup ; }
             }
         }
     }
 cleanup:
+
+    if (invocations != NULL && fclose (invocations) != 0) failed = true ;
 
     if (samples != NULL && fclose (samples) != 0)
     {
