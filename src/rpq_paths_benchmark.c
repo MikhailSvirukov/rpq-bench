@@ -174,6 +174,14 @@ static int run_query
         info = GrB_INVALID_VALUE ;
         goto cleanup ;
     }
+    // Python filters these modes first; also reject direct binary invocations.
+    if ((source == 0) == (target == 0))
+    {
+        if (msg != NULL) snprintf (msg, LAGRAPH_MSG_LEN,
+            "exactly one of source and destination must be fixed") ;
+        info = GrB_INVALID_VALUE ;
+        goto cleanup ;
+    }
     single_destination = source == 0 && target != 0 ;
     info = read_states (meta, &QS, &nqs, msg) ;
     if (info != GrB_SUCCESS) goto cleanup ;

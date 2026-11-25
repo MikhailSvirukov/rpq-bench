@@ -190,7 +190,7 @@ with tempfile.TemporaryDirectory() as temporary:
             if process.poll() is None:
                 process.kill()
             process.communicate()
-    # Python rejects unsupported endpoints before starting the C executable.
+    # Python filters constant-constant without failing the remaining batch.
     fixed = queries / '5'
     fixed.mkdir()
     (fixed / 'meta.txt').write_text('1 3\n1 1\n1 2\n1 7\n')
@@ -198,9 +198,10 @@ with tempfile.TemporaryDirectory() as temporary:
     output = base / 'failed'
     result = subprocess.run([sys.executable, str(root / 'scripts/rpq_paths_bench.py'), str(queries),
                              str(matrices), '--output', str(output), '--verify'], capture_output=True, text=True)
-    assert result.returncode != 0
-    assert not output.exists()
-    assert 'fixed source and destination' in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert [line.split('\t')[0] for line in result.stdout.splitlines()[1:]] == ['1','2','4']
+    assert str(fixed) not in (output / 'run.json').read_text()
+    assert 'fixed source and destination' not in result.stderr
     import shutil
     shutil.rmtree(fixed)
     # Exercise archive download/extraction through local file URLs as well.
@@ -209,4 +210,4 @@ with tempfile.TemporaryDirectory() as temporary:
     subprocess.run([sys.executable, str(root / 'scripts/download_data.py'),
                     '--queries-url', Path(qzip).as_uri(), '--matrices-url', Path(mzip).as_uri(),
                     '--output', str(base / 'downloaded'), '--verify'], check=True)
-print('Smoke tests passed: single/batch queries, four semantics with/without --verify, prepared SD/backward queries, any-any filtering, repeated passes, download.')
+print('Smoke tests passed: single/batch queries, four semantics with/without --verify, prepared SD/backward queries, unsupported-endpoint filtering, repeated passes, download.')

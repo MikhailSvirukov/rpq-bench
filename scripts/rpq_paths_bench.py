@@ -23,12 +23,18 @@ class BenchmarkInterrupted(Exception):
         self.signum = signum
 
 
-def is_unbound_query(directory):
-    """Skip only a confirmed any-any query; leave invalid inputs to validation/the driver."""
+def has_unsupported_endpoints(directory):
+    """Skip valid endpoint pairs unless exactly one endpoint is fixed."""
     try:
         with (directory / "meta.txt").open() as stream:
             endpoints = list(islice((token for line in stream for token in line.split()), 2))
-        return len(endpoints) == 2 and all(int(value) == 0 for value in endpoints)
+        if len(endpoints) != 2 or any(not value.isascii() or not value.isdecimal()
+                                      for value in endpoints):
+            return False
+        source, destination = map(int, endpoints)
+        if max(source, destination) > 2**63 - 1:
+            return False
+        return (source == 0) == (destination == 0)
     except (OSError, ValueError):
         return False
 
@@ -198,7 +204,7 @@ def main():
                          key=lambda p: int(p.name))
     if not queries:
         parser.error("expected meta.txt or numbered query folders containing meta.txt")
-    queries = [directory for directory in queries if not is_unbound_query(directory)]
+    queries = [directory for directory in queries if not has_unsupported_endpoints(directory)]
     if not queries:
         return 0
     if not driver.is_file():

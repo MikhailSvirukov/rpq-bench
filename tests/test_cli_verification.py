@@ -73,12 +73,12 @@ print('query\\ttime_seconds\\tpaths\\n1\\t0.1\\t2')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('path count changed', result.stderr)
 
-    def test_any_any_queries_are_silently_filtered_before_driver_and_verification(self):
+    def test_unsupported_endpoints_are_filtered_before_driver_and_verification(self):
         for number, endpoints in ((2, '0 3'), (3, '0 0'), (4, '1 3')):
             query = self.queries / str(number)
             query.mkdir()
             (query / 'meta.txt').write_text(f'{endpoints}\n1 1\n1 2\n1 7\n')
-            if number != 3:  # Skipped queries need no NFA files, even with --verify.
+            if number == 2:  # Skipped modes need no NFA files, even with --verify.
                 (query / '7.txt').write_text(MATRIX)
         driver = self.build / 'rpq_paths_benchmark'
         driver.write_text(f'''#!{sys.executable}
@@ -104,9 +104,6 @@ for phase, passes in [('warmup', int(sys.argv[2])), ('measured', int(sys.argv[3]
                         stream.write(f'{{name}}\\t1\\n')
 ''')
         for verify in (False, True):
-            if verify:
-                # Existing verification still rejects two fixed endpoints.
-                shutil.rmtree(self.queries / '4')
             for memory in (False, True):
                 if memory and not sys.platform.startswith('linux'):
                     continue
@@ -118,14 +115,17 @@ for phase, passes in [('warmup', int(sys.argv[2])), ('measured', int(sys.argv[3]
                     command.append('--memory')
                 result = subprocess.run(command, capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                expected = ['1', '2'] if verify else ['1', '2', '4']
+                expected = ['1', '2']
                 self.assertEqual([line.split('\t')[0] for line in result.stdout.splitlines()[1:]], expected * 2)
+                self.assertNotIn('query 4:', result.stderr)
+                self.assertNotIn(str(self.queries / '4'), result.stderr)
                 self.assertNotIn('query 3:', result.stderr)
                 self.assertNotIn(str(self.queries / '3'), result.stderr)
                 metadata = json.loads((output / 'run.json').read_text())
                 self.assertEqual(metadata['command'][-len(expected):], [str(self.queries / name) for name in expected])
                 for path in output.iterdir():
                     self.assertNotIn(str(self.queries / '3'), path.read_text())
+                    self.assertNotIn(str(self.queries / '4'), path.read_text())
                 if memory:
                     import csv
                     with (output / 'memory.tsv').open() as stream:
@@ -155,6 +155,17 @@ for phase, passes in [('warmup', int(sys.argv[2])), ('measured', int(sys.argv[3]
                     self.assertEqual((output / 'results.tsv').read_text(), 'previous results\n')
                 else:
                     self.assertFalse(output.exists())
+
+    def test_constant_constant_only_exits_without_driver_or_output(self):
+        self.metadata.write_text('1 3\ninvalid remainder is skipped\n')
+        (self.build / 'rpq_paths_benchmark').unlink()
+        output = self.root / 'constant-only'
+        result = subprocess.run(self.output_command(output) + ['--verify'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '')
+        self.assertEqual(result.stderr, '')
+        self.assertFalse(output.exists())
 
     def output_command(self, output):
         return [sys.executable, str(ROOT / 'scripts/rpq_paths_bench.py'),
