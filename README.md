@@ -23,12 +23,15 @@ python3 scripts/rpq_paths_bench.py /path/to/queries/1 /path/to/matrices \
   --semantics trails --warmup 1 --iterations 5 --output results/query-1
 ```
 
-Queries whose source and destination in `meta.txt` are both zero (`any-any`)
-are silently skipped in Python before verification or driver startup. No log
-entries or report records are created for them. If all queries are skipped,
-the command succeeds without launching the driver or creating output files.
-This filter retains queries with at least one fixed endpoint; the existing
-`--verify` check still rejects two fixed endpoints as unsupported by the API.
+Only queries with **exactly one fixed endpoint** are run: `source > 0,
+destination = 0` or `source = 0, destination > 0` in `meta.txt`. Queries with
+both endpoints zero (`any-any`) or both positive (`constant-constant`) are
+silently skipped in Python before verification or driver startup. No log or
+report records are created for them. If all queries are skipped, the command
+succeeds without launching the driver or creating output files. Malformed
+endpoint fields remain subject to normal validation/error handling. The C
+driver also rejects both unsupported modes when invoked directly, rather
+than ignoring the destination or running an any-any query.
 
 The second argument accepts a graph matrix directory, individual numeric
 matrix files, or `label=/path/to/matrix` mappings. A matrix directory is scanned
